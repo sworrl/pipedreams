@@ -19,7 +19,7 @@ PipeDreams is a dark-mode, retro-vibed audio control panel that lets you:
 ## 🚀 One-Liner Install (For The Impatient)
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/YOUR_USERNAME/pipedreams/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/sworrl/pipedreams/main/install.sh | bash
 ```
 
 *"What could possibly go wrong?" - Famous Last Words*
@@ -71,7 +71,7 @@ Our Winamp Fire visualization features:
 
 ```bash
 # Clone this masterpiece
-git clone https://github.com/YOUR_USERNAME/pipedreams.git
+git clone https://github.com/sworrl/pipedreams.git
 cd pipedreams
 
 # Run the installer (it's friendly, we promise)
@@ -141,7 +141,7 @@ Found a bug? Want to add more flashy effects? Think our code is terrible?
 
 ## 📜 License
 
-MIT License - Do whatever you want with this. Make it better. Make it worse. Use it to control your smart fridge. We don't judge.
+GPL-3.0 License - Free as in freedom! Fork it, modify it, share it. Just keep it free and open source. See [LICENSE](LICENSE) for details.
 
 ## 🙏 Credits
 
