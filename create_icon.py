@@ -46,6 +46,8 @@ for x in range(0, 512, 10):
     y = 100 + int(30 * math.sin(x / 30.0))
     draw.ellipse([x, y, x+4, y+4], fill=(0, 255, 136, 100))
 
-# Save
-img.save('/root/pipedreams/pipedreams_icon.png')
+# Save in the script's directory
+import os
+script_dir = os.path.dirname(os.path.abspath(__file__))
+img.save(os.path.join(script_dir, 'pipedreams_icon.png'))
 print("Icon created: pipedreams_icon.png")

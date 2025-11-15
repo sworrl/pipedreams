@@ -64,7 +64,7 @@ echo ""
 echo "🚀 Installing PipeDreams system-wide..."
 
 # Copy main script to /usr/local/share
-sudo cp "$SCRIPT_DIR/pipedreams_v3.py" /usr/local/share/pipedreams.py
+sudo cp "$SCRIPT_DIR/pipedreams.py" /usr/local/share/pipedreams.py
 sudo chmod 755 /usr/local/share/pipedreams.py
 echo "✅ Installed main script to /usr/local/share/pipedreams.py"
 
