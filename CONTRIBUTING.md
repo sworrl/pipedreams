@@ -4,7 +4,7 @@ Thanks for considering contributing to PipeDreams! Here's how you can help make 
 
 ## 🐛 Found a Bug?
 
-1. Check if it's already reported in [Issues](https://github.com/YOUR_USERNAME/pipedreams/issues)
+1. Check if it's already reported in [Issues](https://github.com/sworrl/pipedreams/issues)
 2. If not, create a new issue with:
    - Clear description of the bug
    - Steps to reproduce
@@ -49,7 +49,7 @@ Before submitting:
 
 ## 📜 License
 
-By contributing, you agree your contributions will be licensed under the MIT License.
+By contributing, you agree your contributions will be licensed under the GPL-3.0 License.
 
 ## 🙏 Questions?
 
