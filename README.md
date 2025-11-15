@@ -172,7 +172,7 @@ Side effects may include:
 
 ## 🎵 Easter Egg
 
-If you made it this far, here's a secret: The plasma mode's color shift speed is synchronized to make you feel like you're tripping. You're welcome.
+If you made it this far, here's a secret: The plasma mode's color shift speed is synchronized with your internal rotational frequency to make you feel like you're tripping.....Sooooo, You're welcome.
 
 **P.S.** If you're still using PulseAudio, we're not mad, just disappointed.
 
