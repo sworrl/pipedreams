@@ -111,7 +111,7 @@ numpy
 Use the automated installer script (detects your OS and installs all dependencies):
 
 ```bash
-git clone https://github.com/yourusername/pipedreams
+git clone https://github.com/sworrl/pipedreams
 cd pipedreams
 ./install.sh
 ```
@@ -144,7 +144,7 @@ sudo dnf install pipewire pipewire-pulseaudio projectM-devel projectM-data xdoto
 
 ### 2. Clone and Run
 ```bash
-git clone https://github.com/yourusername/pipedreams
+git clone https://github.com/sworrl/pipedreams
 cd pipedreams
 python3 pipedreams.py
 ```
