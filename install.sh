@@ -1,182 +1,125 @@
 #!/bin/bash
-# PipeDreams installation script - Fully automated system installation
+# PipeDreams Installer Script
+# Automatically installs all dependencies and sets up PipeDreams
 
 set -e
 
-echo "🌈 Welcome to PipeDreams Installation! 🌈"
-echo "========================================="
+echo "======================================"
+echo "  PipeDreams Installation Script"
+echo "  Version 2.2.3"
+echo "======================================"
 echo ""
 
-# Get the directory where the script is located
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# Check if running on Linux
-if [[ "$OSTYPE" != "linux-gnu"* ]]; then
-    echo "❌ PipeDreams is designed for Linux systems"
+# Detect OS
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS=$ID
+else
+    echo "Cannot detect OS. Please install dependencies manually."
     exit 1
 fi
 
-# Check for Python 3
-if ! command -v python3 &> /dev/null; then
-    echo "❌ Python 3 is required but not found"
-    echo "Install it with: sudo apt install python3 python3-pip"
-    exit 1
-fi
-
-echo "✅ Python 3 found: $(python3 --version)"
-
-# Check for PipeWire
-if ! command -v pw-cli &> /dev/null; then
-    echo "⚠️  Warning: PipeWire doesn't seem to be installed"
-    echo "Install it with: sudo apt install pipewire pipewire-pulse"
-    echo ""
-    read -p "Continue anyway? (y/N) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
-else
-    echo "✅ PipeWire found"
-fi
-
-# Install Python dependencies
-echo ""
-echo "📦 Installing Python dependencies..."
-
-# Check if we should use system packages
-if command -v apt &> /dev/null; then
-    echo "Installing PyQt6 and numpy via apt..."
-    sudo apt install -y python3-pyqt6 python3-numpy python3-pil 2>/dev/null || {
-        echo "⚠️  Some packages not available via apt, will use pip if needed"
-    }
-    echo "✅ System dependencies installed"
-else
-    pip3 install --user -r requirements.txt 2>/dev/null || pip3 install --break-system-packages -r requirements.txt
-    if [ $? -eq 0 ]; then
-        echo "✅ Dependencies installed successfully"
-    else
-        echo "❌ Failed to install dependencies"
-        exit 1
-    fi
-fi
-
-echo ""
-echo "🚀 Installing PipeDreams system-wide..."
-
-# Copy main script to /usr/local/share
-sudo cp "$SCRIPT_DIR/pipedreams.py" /usr/local/share/pipedreams.py
-sudo chmod 755 /usr/local/share/pipedreams.py
-echo "✅ Installed main script to /usr/local/share/pipedreams.py"
-
-# Create launcher wrapper that handles user switching
-sudo tee /usr/local/bin/pipedreams > /dev/null << 'LAUNCHER_EOF'
-#!/bin/bash
-# PipeDreams launcher - runs as the correct user
-
+# Check if running as root
 if [ "$EUID" -eq 0 ]; then
-    # Running as root, need to find the actual user
-    REAL_USER="${SUDO_USER:-$(who | awk '{print $1}' | head -1)}"
+    echo "Please do not run this script as root"
+    exit 1
+fi
 
-    if [ -z "$REAL_USER" ] || [ "$REAL_USER" = "root" ]; then
-        echo "ERROR: PipeDreams must be run as a regular user, not root!"
-        echo "Please run as your regular user account."
+echo "[1/5] Detected OS: $OS"
+echo ""
+
+# Install dependencies based on OS
+echo "[2/5] Installing system dependencies..."
+case $OS in
+    ubuntu|debian|pop|linuxmint)
+        sudo apt update
+        sudo apt install -y pipewire pipewire-pulse libprojectm-dev libprojectm-4 projectm-data \
+                            xdotool wmctrl python3 python3-pyqt6 python3-numpy python3-pip
+        ;;
+    arch|manjaro|endeavouros)
+        sudo pacman -Sy --noconfirm pipewire pipewire-pulse projectm xdotool wmctrl \
+                                     python python-pyqt6 python-numpy python-pip
+        ;;
+    fedora|rhel|centos)
+        sudo dnf install -y pipewire pipewire-pulseaudio projectM-devel projectM-data \
+                           xdotool wmctrl python3 python3-pyqt6 python3-numpy python3-pip
+        ;;
+    *)
+        echo "Unsupported OS: $OS"
+        echo "Please install dependencies manually:"
+        echo "  - pipewire, pipewire-pulse"
+        echo "  - libprojectm-4, projectm-data"
+        echo "  - xdotool, wmctrl"
+        echo "  - python3, python3-pyqt6, python3-numpy"
         exit 1
-    fi
+        ;;
+esac
 
-    # Get user's UID
-    USER_UID=$(id -u "$REAL_USER")
+echo ""
+echo "[3/5] Installing PipeDreams..."
 
-    # Determine DISPLAY
-    if [ -z "$DISPLAY" ]; then
-        # Try to detect display
-        DISPLAY=":0"
-        if [ -S "/run/user/$USER_UID/wayland-0" ]; then
-            export WAYLAND_DISPLAY="wayland-0"
-        fi
-    fi
+# Copy main application
+sudo cp pipedreams.py /usr/local/share/
+sudo chmod +x /usr/local/share/pipedreams.py
 
-    # Set up environment and run as the user
-    export XDG_RUNTIME_DIR="/run/user/$USER_UID"
+# Create symlink for easy execution
+sudo ln -sf /usr/local/share/pipedreams.py /usr/local/bin/pipedreams
 
-    exec sudo -u "$REAL_USER" -E DISPLAY="$DISPLAY" /usr/bin/python3 /usr/local/share/pipedreams.py "$@"
+echo ""
+echo "[4/5] Setting up PipeWire..."
+
+# Enable and start PipeWire for the current user
+systemctl --user enable pipewire pipewire-pulse
+systemctl --user start pipewire pipewire-pulse
+
+# Wait for PipeWire to start
+sleep 2
+
+echo ""
+echo "[5/5] Verifying installation..."
+
+# Check if PipeWire is running
+if systemctl --user is-active --quiet pipewire; then
+    echo "✓ PipeWire is running"
 else
-    # Already running as a user, just execute
-    exec /usr/bin/python3 /usr/local/share/pipedreams.py "$@"
+    echo "⚠ Warning: PipeWire is not running. Run: systemctl --user start pipewire"
 fi
-LAUNCHER_EOF
 
-sudo chmod +x /usr/local/bin/pipedreams
-echo "✅ Installed launcher to /usr/local/bin/pipedreams"
-
-# Generate and install icon
-echo ""
-echo "🎨 Creating application icon..."
-
-if command -v python3 &> /dev/null && python3 -c "import PIL" 2>/dev/null; then
-    python3 "$SCRIPT_DIR/create_icon.py" 2>/dev/null || {
-        echo "⚠️  Icon generation failed, using default icon"
-    }
-
-    if [ -f "$SCRIPT_DIR/pipedreams_icon.png" ]; then
-        sudo mkdir -p /usr/local/share/pixmaps
-        sudo cp "$SCRIPT_DIR/pipedreams_icon.png" /usr/local/share/pixmaps/pipedreams.png
-        ICON_PATH="/usr/local/share/pixmaps/pipedreams.png"
-        echo "✅ Installed custom icon"
-    else
-        ICON_PATH="multimedia-audio-player"
-        echo "⚠️  Using default icon"
-    fi
+# Check if projectM is available
+if command -v projectM &> /dev/null; then
+    echo "✓ projectM is installed"
+elif ldconfig -p | grep -q libprojectM; then
+    echo "✓ projectM libraries are installed"
 else
-    ICON_PATH="multimedia-audio-player"
-    echo "⚠️  PIL not available, using default icon"
+    echo "⚠ Warning: projectM may not be properly installed"
 fi
 
-# Create desktop entry for all users
-echo ""
-echo "📋 Creating desktop menu entry..."
+# Check if Python modules are available
+if python3 -c "import PyQt6" 2>/dev/null; then
+    echo "✓ PyQt6 is installed"
+else
+    echo "⚠ Warning: PyQt6 not found. Install with: pip3 install PyQt6"
+fi
 
-sudo tee /usr/share/applications/pipedreams.desktop > /dev/null << EOF
-[Desktop Entry]
-Name=PipeDreams
-GenericName=Audio Control Panel
-Comment=Retro-style PipeWire Audio Control Panel with Visualizations
-Exec=/usr/local/bin/pipedreams
-Icon=$ICON_PATH
-Terminal=false
-Type=Application
-Categories=AudioVideo;Audio;Mixer;Settings;
-Keywords=audio;sound;pipewire;mixer;visualizer;equalizer;
-StartupNotify=true
-EOF
-
-echo "✅ Created system-wide desktop entry"
-
-# Also create user desktop entry
-mkdir -p ~/.local/share/applications
-cp /usr/share/applications/pipedreams.desktop ~/.local/share/applications/
-echo "✅ Created user desktop entry"
-
-# Update desktop database
-if command -v update-desktop-database &> /dev/null; then
-    update-desktop-database ~/.local/share/applications 2>/dev/null || true
-    sudo update-desktop-database /usr/share/applications 2>/dev/null || true
-    echo "✅ Updated desktop database"
+if python3 -c "import numpy" 2>/dev/null; then
+    echo "✓ NumPy is installed"
+else
+    echo "⚠ Warning: NumPy not found. Install with: pip3 install numpy"
 fi
 
 echo ""
-echo "🎉 Installation complete! 🎉"
+echo "======================================"
+echo "  Installation Complete!"
+echo "======================================"
 echo ""
-echo "PipeDreams has been installed system-wide!"
+echo "Run PipeDreams with:"
+echo "  $ pipedreams"
 echo ""
-echo "You can launch it by:"
-echo "  📱 Searching for 'PipeDreams' in your application menu"
-echo "  💻 Typing 'pipedreams' in any terminal"
+echo "Or:"
+echo "  $ python3 /usr/local/share/pipedreams.py"
 echo ""
-echo "🔥 Features:"
-echo "  • 7 retro visualization modes (Fire, Plasma, VFD, etc.)"
-echo "  • Real-time audio statistics"
-echo "  • 10-band equalizer"
-echo "  • Performance presets for gaming/music/streaming"
+echo "Configuration will be saved to:"
+echo "  ~/.config/pipedreams/settings.json"
 echo ""
-echo "Enjoy your audio dreams! 🌈🎵"
+echo "Enjoy PipeDreams!"
 echo ""
