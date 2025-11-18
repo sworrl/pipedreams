@@ -1,181 +1,409 @@
-# 🌈 PipeDreams 🎵
+# PipeDreams - Advanced Audio Visualization Control Center
 
-### *"Because your audio shouldn't sound like a potato"*
+**Version 2.2.3** - Professional Audio Visualization Suite with integrated projectM support
 
-![PipeDreams Icon](pipedreams_icon.png)
+PipeDreams is a comprehensive PyQt6-based audio visualization application that combines real-time spectrum analysis, professional equalizer controls, and stunning visual effects powered by projectM.
 
-**PipeDreams**: The audio control panel that's cooler than Winamp, flashier than a disco ball, and more powerful than... well, `pactl` (which isn't saying much, but still).
+## Screenshots
 
-## 🎪 What is This Madness?
+![PipeDreams Main Window](screenshots/visualizer_tab.png)
+*Main visualizer with real-time spectrum analysis and frequency detection*
 
-Remember when audio configuration on Linux made you want to throw your computer out the window? Yeah, us too. That's why we made PipeDreams - because configuring PipeWire should be FUN, not a descent into dependency hell.
+![ProjectM Integration](screenshots/projectm_tab.png)
+*ProjectM visualizations with 274+ presets and full GUI control*
 
-PipeDreams is a dark-mode, retro-vibed audio control panel that lets you:
-- Actually see what your audio is doing (revolutionary!)
-- Control your audio without learning ancient CLI incantations
-- Relive the glory days of Winamp visualizations
-- Make your neighbors wonder why your computer is emitting rhythmic light patterns at 3 AM
+![Equalizer Controls](screenshots/equalizer_tab.png)
+*10-band parametric equalizer with multiple presets*
 
-## 🚀 One-Liner Install (For The Impatient)
+> **Note:** To capture screenshots for your own documentation, run `./capture_screenshots.sh` from the project directory.
 
+## Features
+
+### Audio Processing
+- **Real-time spectrum analysis** using PipeWire audio capture
+- **10-band parametric equalizer** with multiple presets
+- **Buffer monitoring** with visual fill indicators
+- **Multi-channel support** with low-latency audio processing
+- **Automatic audio device detection** and configuration
+
+### Visualization Modes
+
+PipeDreams includes 21 distinct visualization modes:
+
+#### Classic Modes
+- **Classic** - Traditional bar spectrum analyzer
+- **Winamp Fire** - Fire bars with ember particles and smoke effects
+- **Winamp Waterfall** - Cascading spectrum with wet glass effects
+- **Fire** - Photorealistic fire simulation
+- **Waterfall** - Traditional waterfall display
+
+#### Advanced Modes
+- **Plasma** - Flowing plasma effect with color gradients
+- **Kaleidoscope** - Rotating kaleidoscope patterns
+- **Neon Pulse** - Pulsating neon effects
+- **Rainbow Bars** - Color-cycling bar display
+- **Matrix Rain** - Matrix-style falling characters
+- **Particle Field** - Dynamic particle systems
+- **Starfield** - 3D starfield simulation
+- **Waveform** - Oscilloscope-style waveform display
+- **Circular** - Circular spectrum visualization
+- **VFD 80s/90s** - Retro VFD-style displays
+- **Aurora** - Aurora borealis effects
+- **Non-Newtonian** - Viscous fluid simulation
+- **Holographic** - Futuristic hologram effects
+- **Seismic** - Earthquake-style visualization
+- **DNA Helix** - Rotating double helix
+- **Quantum** - Quantum particle effects
+
+### ProjectM Integration
+- **274+ presets** included from projectM library
+- **Embedded window management** using X11 window embedding
+- **Full GUI control** with preset navigation
+- **Preset browser** with dropdown selection
+- **Navigation buttons** for Previous/Next/Random presets
+- **Lock/Unlock** preset functionality
+- **Auto-shuffle** mode support
+
+### Frequency Analysis
+- **Peak frequency detection** with animated labels
+- **Mode-specific label animations** (upward float, waterfall, spiral, etc.)
+- **Color-coded frequency ranges** (Red: Peak, Orange: High, Yellow: Med-High, Green: Medium)
+- **Real-time frequency tagging** for dominant peaks
+
+### Performance Features
+- **Advanced buffer management** with configurable sizes
+- **Frame throttling** (60 FPS target with adaptive rendering)
+- **Low-latency audio capture** (10ms latency)
+- **Efficient rendering** with OpenGL acceleration via projectM
+- **Settings persistence** in ~/.config/pipedreams/settings.json
+
+## Requirements
+
+### System Dependencies
 ```bash
-curl -sSL https://raw.githubusercontent.com/sworrl/pipedreams/main/install.sh | bash
+# PipeWire audio system
+pipewire
+pipewire-pulse
+
+# ProjectM visualization library
+libprojectm-dev
+libprojectm-4
+projectm-data
+
+# X11 tools for window embedding
+xdotool
+wmctrl
+
+# Python dependencies
+python3
+python3-pyqt6
+python3-numpy
 ```
 
-*"What could possibly go wrong?" - Famous Last Words*
+### Python Packages
+```bash
+PyQt6
+numpy
+```
 
-## 🎨 Features That'll Blow Your Mind (Or At Least Your Speakers)
+## Quick Install
 
-### 📊 **7 Retro Visualization Modes**
-
-1. **Classic Bars** - Because sometimes you just want LEDs that go up and down
-2. **Winamp Fire** 🔥 - Bars that literally burn and smoke as they fall. Physics? Never heard of her.
-3. **Winamp Waterfall** 💙 - Hair-thin blue bars cascading like a Bob Ross painting
-4. **Waterfall** 🌊 - Modern scrolling heatmap for the kids these days
-5. **Plasma** 🌈 - Rainbow glowing curves that shift through every color known to humankind (and some that aren't)
-6. **80s VFD** 💠 - Cyan monochrome goodness, like your calculator from 1985
-7. **90s VFD** 💚 - Green/amber perfection, tastes like Mountain Dew and dial-up
-
-### 🎛️ **Audio Control That Actually Works**
-
-- **Real-time stats**: RMS, Peak, Dominant Frequency, Latency - all the numbers you pretend to understand!
-- **Device switching**: Because having 47 audio devices is totally normal
-- **Volume control**: Revolutionary slider technology from the future (2001)
-- **10-Band Equalizer**: Make everything sound like you're in a bass-boosted YouTube video
-
-### ⚡ **Performance Tuning**
-
-Four presets for people who can't be bothered:
-- 🎮 **Gaming**: Low latency (for when milliseconds matter in your KDA)
-- 🎵 **Music**: Ultra-low latency (for audiophiles and studio engineers who drink too much coffee)
-- 📺 **Streaming**: Balanced (for when you're pretending to be a content creator)
-- 💎 **Quality**: High buffer (for when you just want things to work™)
-
-### 🔥 **The Fire Mode Everyone Keeps Talking About**
-
-Our Winamp Fire visualization features:
-- Peaks that fall 3x faster than your motivation on Monday
-- Realistic ember trails (white → orange → red → smoke)
-- More glow effects than a rave in 1999
-
-## 📋 Requirements
-
-- **Linux** (obviously - this isn't amateur hour)
-- **PipeWire** (the audio system that finally works)
-- **Python 3.8+** (we're not barbarians)
-- **PyQt6** (for that sweet, sweet GUI goodness)
-- **numpy** (because we do actual math, not just `alert('hello world')`)
-- **A sense of humor** (non-negotiable)
-
-## 🛠️ Manual Installation (For Control Freaks)
+Use the automated installer script (detects your OS and installs all dependencies):
 
 ```bash
-# Clone this masterpiece
-git clone https://github.com/sworrl/pipedreams.git
+git clone https://github.com/yourusername/pipedreams
 cd pipedreams
-
-# Run the installer (it's friendly, we promise)
 ./install.sh
-
-# Or do it yourself like a rebel
-pip install -r requirements.txt
-chmod +x pipedreams.py
-./pipedreams.py
 ```
 
-## 🎮 Usage
+That's it! The installer will:
+- Detect your OS (Ubuntu/Debian, Arch, or Fedora)
+- Install all required dependencies
+- Set up PipeWire audio system
+- Install PipeDreams system-wide
+- Verify the installation
 
-1. **Launch it**: Type `pipedreams` or find it in your app menu like a normal person
-2. **Pick a visualization**: Try them all. Life's too short for boring audio visualizations.
-3. **Adjust settings**: Or don't. We're not your mom.
-4. **Watch the pretty colors**: This is where the magic happens
+## Manual Installation
 
-### Pro Tips™
+### 1. Install System Dependencies
 
-- **Fire mode** looks sick with drum & bass
-- **Plasma** mode will make you feel like you're in TRON
-- **VFD modes** are perfect for pretending it's still the 90s
-- The **status bar** shows real-time stats - it's not just random numbers, we swear!
+#### Debian/Ubuntu
+```bash
+sudo apt install pipewire pipewire-pulse libprojectm-dev libprojectm-4 projectm-data xdotool wmctrl python3-pyqt6 python3-numpy
+```
 
-## 🎯 Preset Recommendations
+#### Arch Linux
+```bash
+sudo pacman -S pipewire pipewire-pulse projectm xdotool wmctrl python-pyqt6 python-numpy
+```
 
-| If you're... | Use this preset |
-|--------------|----------------|
-| Gaming competitively | Gaming (512 samples) |
-| Producing sick beats | Music (256 samples) |
-| Streaming to 3 viewers | Streaming (1024 samples) |
-| Just vibing | Quality (2048 samples) |
-| On a potato PC | Quality (fewer dropouts) |
+#### Fedora/RHEL
+```bash
+sudo dnf install pipewire pipewire-pulseaudio projectM-devel projectM-data xdotool wmctrl python3-pyqt6 python3-numpy
+```
 
-## 🐛 Troubleshooting (AKA "It's Not A Bug, It's A Feature")
+### 2. Clone and Run
+```bash
+git clone https://github.com/yourusername/pipedreams
+cd pipedreams
+python3 pipedreams.py
+```
 
-**Q: The visualizations are laggy!**
-A: Your computer is probably mining Bitcoin in the background. Or you selected Winamp Waterfall on a toaster.
+### 3. Optional: Install System-Wide
+```bash
+sudo cp pipedreams.py /usr/local/share/
+sudo chmod +x /usr/local/share/pipedreams.py
+sudo ln -sf /usr/local/share/pipedreams.py /usr/local/bin/pipedreams
+```
 
-**Q: No sound!**
-A: Did you try turning it off and on again? But seriously, check if PipeWire is actually running.
+## Usage
 
-**Q: The fire effect is too intense!**
-A: No such thing. Turn up your music louder.
+### Starting PipeDreams
+```bash
+python3 pipedreams.py
+```
 
-**Q: Where's my Milkdrop?**
-A: In your dreams (get it? Pipe*Dreams*?). But seriously, we're working on it.
+Or if installed system-wide:
+```bash
+/usr/local/share/pipedreams.py
+```
 
-**Q: Why does the status bar show -∞ dB?**
-A: Because there's literally zero audio. Play something!
+### Audio Configuration
 
-## 🎨 Screenshots
+PipeDreams automatically detects your default PipeWire audio output and creates a monitoring source. The application:
 
-*"A picture is worth a thousand words, but our visualizations are worth a thousand pictures"*
+1. Queries PipeWire for available audio devices
+2. Identifies the default output sink
+3. Creates a virtual monitor source if needed
+4. Captures audio with 10ms latency at 48kHz
 
-(TODO: Add screenshots once you stop playing with the fire effect long enough to take them)
+### Visualization Controls
 
-## 🤝 Contributing
+#### Visualizer Tab
+- **Mode Selection** - Choose from 21 visualization modes via dropdown
+- **Audio Scope** - Real-time waveform display
+- **Frequency Spectrum** - Live spectrum graph
+- **Status Bar** - Shows device, RMS, peak levels, dominant frequency, and BPM
 
-Found a bug? Want to add more flashy effects? Think our code is terrible?
+#### ProjectM Tab
+- **Preset Dropdown** - Browse and select from 274+ presets
+- **Previous/Next** - Navigate through presets sequentially
+- **Random** - Jump to a random preset
+- **Lock/Unlock** - Toggle preset lock (prevents auto-transitions)
+- **Auto-Shuffle** - Enable automatic preset rotation
 
-1. Fork it
-2. Fix it
-3. Submit a PR
-4. Become internet famous (results may vary)
+#### Equalizer Tab
+- **10 frequency bands** - 31Hz to 16kHz
+- **Preset Selection** - Choose from multiple EQ curves:
+  - Flat
+  - Pop
+  - Rock
+  - Jazz
+  - Classical
+  - Electronic
+  - Hip Hop
+  - Vocal Boost
+  - Bass Boost
+- **Visual EQ Display** - Real-time frequency response visualization
 
-## 📜 License
+#### Spectrum Settings Tab
+- **Buffer Size** - Adjust audio buffer (64-8192 samples)
+- **Smoothing** - Control spectrum smoothing (0.0-0.99)
+- **Peak Hold** - Enable/disable peak markers
+- **Fill Style** - Toggle gradient fills
+- **Label Display** - Show/hide frequency labels
 
-GPL-3.0 License - Free as in freedom! Fork it, modify it, share it. Just keep it free and open source. See [LICENSE](LICENSE) for details.
+#### Performance Tab
+- **Frame Rate** - Target FPS adjustment (30-120 FPS)
+- **Render Quality** - Quality vs performance settings
+- **Buffer Fill Monitor** - Visual indicator of audio buffer status
 
-## 🙏 Credits
+#### Advanced Tab
+- **Latency Settings** - Fine-tune audio latency
+- **Device Selection** - Manual audio device override
+- **Debug Options** - Enable verbose logging
 
-- **Winamp**: For inspiring a generation of visualization addicts
-- **PipeWire**: For finally making Linux audio not terrible
-- **The 90s**: For VFD displays and questionable fashion choices
-- **You**: For actually reading this README instead of just running `curl | bash`
+### Keyboard Shortcuts (ProjectM)
 
-## ⚠️ Warning
+When projectM window is focused:
+- **N** - Next preset
+- **P** - Previous preset
+- **R** - Random preset
+- **L** - Lock/unlock preset
+- **M** - Show/hide menu
+- **F** - Toggle fullscreen
 
-Side effects may include:
-- Sudden urge to organize your music collection
-- Compulsive need to show people your audio visualizations
-- Excessive time spent tweaking buffer sizes
-- Thinking in dB
-- An unreasonable attachment to retro aesthetics
+## Configuration
 
----
+Settings are automatically saved to `~/.config/pipedreams/settings.json` and include:
 
-<p align="center">
-  <b>Made with 💚 by developers who were tired of pulseaudio</b><br>
-  <i>"It's not just an audio mixer, it's a lifestyle"</i><br>
-  <br>
-  <sub>PipeDreams v3.0 - Now with 420% more ember effects</sub>
-</p>
+```json
+{
+  "visualization_mode": 1,
+  "buffer_size": 2048,
+  "smoothing": 0.75,
+  "peak_hold": true,
+  "fill_spectrum": true,
+  "show_labels": true,
+  "target_fps": 60,
+  "projectm_embedded": true,
+  "eq_preset": "flat",
+  "eq_gains": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+}
+```
 
----
+## Technical Details
 
-## 🎵 Easter Egg
+### Audio Pipeline
+```
+PipeWire Output → Monitor Source → parec Capture →
+FFT Analysis → Spectrum Processing → Visualization Rendering
+```
 
-If you made it this far, here's a secret: The plasma mode's color shift speed is synchronized with your internal rotational frequency to make you feel like you're tripping.....Sooooo, You're welcome.
+### Visualization Architecture
+- **PyQt6** - GUI framework
+- **NumPy** - FFT and signal processing
+- **OpenGL** (via projectM) - Hardware-accelerated rendering
+- **X11 Embedding** - Seamless window integration
 
-**P.S.** If you're still using PulseAudio, we're not mad, just disappointed.
+### Performance Characteristics
+- **Audio Latency**: 10ms (configurable)
+- **Sample Rate**: 48kHz
+- **FFT Size**: 2048 samples (configurable)
+- **Frame Rate**: 60 FPS target
+- **CPU Usage**: ~5-10% on modern systems
+- **Memory**: ~50-100MB typical
 
-**P.P.S.** Yes, the Winamp Fire mode's ember physics are scientifically accurate.*
+## Troubleshooting
 
-<sub>*Not actually scientifically accurate. Please don't email us.</sub>
+### Audio Not Detected
+```bash
+# Check PipeWire status
+systemctl --user status pipewire
+
+# List audio devices
+pw-cli list-objects | grep node.name
+
+# Verify PipeWire is running
+ps aux | grep pipewire
+```
+
+### ProjectM Window Not Embedding
+```bash
+# Verify xdotool is installed
+which xdotool
+
+# Check if projectM is installed
+projectM --version
+
+# Verify window manager supports embedding
+wmctrl -m
+```
+
+### Performance Issues
+1. Reduce target FPS in Performance tab
+2. Decrease buffer size for lower latency (higher CPU)
+3. Increase buffer size for smoother rendering (higher latency)
+4. Disable peak hold and labels for minimal overhead
+5. Use simpler visualization modes (Classic, Waterfall)
+
+### ProjectM Preset Selection Issues
+If presets don't load when selected from dropdown:
+1. Use Previous/Next buttons instead
+2. Check projectM preset directory: `/usr/local/share/projectM/presets/`
+3. Verify preset files have `.milk` extension
+4. Random button always works correctly
+
+### Wayland Rendering Issues
+If you see duplicated/mirrored UI elements (version 2.2.3+ has fixes):
+1. Update to the latest version from GitHub
+2. Try setting `QT_QPA_PLATFORM=wayland` environment variable
+3. Or force X11 mode with `QT_QPA_PLATFORM=xcb`
+4. Check compositor-specific settings if using KDE/GNOME
+
+## Development
+
+### Project Structure
+```
+pipedreams.py           # Main application (4400+ lines)
+├── SpectrumWidget      # Visualization rendering
+├── ProjectMWidget      # ProjectM window embedding
+├── EqualizerWidget     # 10-band parametric EQ
+├── MainWindow          # Primary UI and control logic
+└── Audio Thread        # PipeWire capture and FFT
+```
+
+### Adding New Visualization Modes
+
+1. Add mode name to dropdown (line ~3730)
+2. Implement `draw_<mode>()` method in SpectrumWidget
+3. Add mode to `paintEvent()` dispatcher (line ~745)
+4. Add label animation pattern (line ~650)
+
+Example:
+```python
+def draw_my_mode(self, painter):
+    """Custom visualization mode"""
+    width = self.width()
+    height = self.height()
+    # ... render logic ...
+```
+
+## Contributing
+
+Contributions are welcome! Areas for improvement:
+
+- Additional visualization modes
+- More EQ presets
+- Better projectM preset management
+- Audio file playback support
+- Recording/screenshot capabilities
+- MIDI controller support
+- Network streaming
+- Plugin architecture
+
+## License
+
+This project is licensed under the MIT License - see LICENSE file for details.
+
+## Credits
+
+- **projectM** - Advanced music visualization library
+- **PipeWire** - Modern Linux audio system
+- **PyQt6** - Python GUI framework
+- **NumPy** - Numerical computing library
+
+## Version History
+
+### 2.2.3 (Current)
+- Fixed Wayland rendering bug causing UI duplication/mirroring
+- Fixed duplicate VBoxLayout creation preventing proper widget rendering
+- Added compositor-specific widget attributes for better Wayland compatibility
+- Fixed projectM preset navigation with signal blocking
+- Fixed duplicate frequency labels with added_peaks tracking
+- Enhanced Winamp Fire with particles, smoke, and noise
+- Added 50ms delays to preset keyboard navigation
+- Improved buffer fill visualization
+
+### 2.2.2
+- Added projectM GUI controls with 274 presets
+- Implemented embedded window management
+- Added preset browser and navigation
+
+### 2.2.1
+- Enhanced spectrum analyzer scaling
+- Fixed widget sizing issues
+- Replaced latency display with buffer fill
+
+### 2.2.0
+- Initial projectM integration
+- Added X11 window embedding
+- Implemented 21 visualization modes
+
+## Support
+
+For issues, questions, or feature requests, please open an issue on GitHub.
+
+## Author
+
+PipeDreams - Advanced Audio Visualization Control Center
