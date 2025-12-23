@@ -83,57 +83,63 @@ PipeDreams is a comprehensive PyQt6-based audio visualization application that c
 
 PipeDreams requires the following system packages:
 
-\# PipeWire audio system  
-pipewire  
-pipewire-pulse
+**Runtime Dependencies:**
+* pipewire, pipewire-pulse (audio system)
+* xdotool, wmctrl (X11 window embedding)
+* python3, python3-pyqt6, python3-numpy
 
-\# ProjectM visualization library  
-libprojectm-dev  
-libprojectm-4  
-projectm-data
+**Build Dependencies (for projectM):**
+* git, cmake, build-essential/gcc
+* OpenGL libraries (mesa, glew, glm)
+* SDL2, Qt5 base, FFmpeg development libraries
 
-\# X11 tools for window embedding  
-xdotool  
-wmctrl
-
-\# Python dependencies  
-python3  
-python3-pyqt6  
-python3-numpy
+**Note:** The automated installer handles all dependencies automatically. projectM is built from source for best compatibility.
 
 ### **Python Packages**
 
-PyQt6  
+PyQt6
 numpy
 
 ## **🚀 Quick Install**
 
-Use the automated installer script (detects your OS and installs all dependencies):
+Use the automated installer script (detects your OS, installs dependencies, and builds projectM from source):
 
-git clone \[https://github.com/sworrl/pipedreams\](https://github.com/sworrl/pipedreams)  
-cd pipedreams  
+git clone \[https://github.com/sworrl/pipedreams\](https://github.com/sworrl/pipedreams)
+cd pipedreams
 ./install.sh
+
+**Note:** The installer builds projectM from the latest GitHub source to ensure you have the most recent version with all features and bug fixes.
 
 ### **Manual Installation**
 
-#### **1\. Install System Dependencies**
+#### **1\. Install Build Dependencies**
 
 | OS | Command |
 | :---- | :---- |
-| **Debian/Ubuntu** | sudo apt install pipewire pipewire-pulse libprojectm-dev libprojectm-4 projectm-data xdotool wmctrl python3-pyqt6 python3-numpy |
-| **Arch Linux** | sudo pacman \-S pipewire pipewire-pulse projectm xdotool wmctrl python-pyqt6 python-numpy |
-| **Fedora/RHEL** | sudo dnf install pipewire pipewire-pulseaudio projectM-devel projectM-data xdotool wmctrl python3-pyqt6 python3-numpy |
+| **Debian/Ubuntu** | sudo apt install pipewire pipewire-pulse xdotool wmctrl python3-pyqt6 python3-numpy git cmake build-essential libgl1-mesa-dev libglm-dev libsdl2-dev libglew-dev qtbase5-dev libavcodec-dev libavformat-dev libavutil-dev libpulse-dev |
+| **Arch Linux** | sudo pacman \-S pipewire pipewire-pulse xdotool wmctrl python-pyqt6 python-numpy git cmake gcc glm sdl2 glew qt5-base ffmpeg |
+| **Fedora/RHEL** | sudo dnf install pipewire pipewire-pulseaudio xdotool wmctrl python3-pyqt6 python3-numpy git cmake gcc-c++ mesa-libGL-devel glm-devel SDL2-devel glew-devel qt5-qtbase-devel ffmpeg-devel |
 
-#### **2\. Clone and Run**
+#### **2\. Build projectM from Source**
 
-git clone \[https://github.com/sworrl/pipedreams\](https://github.com/sworrl/pipedreams)  
-cd pipedreams  
+git clone https://github.com/projectM-visualizer/projectm.git
+cd projectm
+mkdir build && cd build
+cmake .. \-DCMAKE\_BUILD\_TYPE=Release \-DCMAKE\_INSTALL\_PREFIX=/usr/local \-DENABLE\_PULSEAUDIO=ON
+make \-j$(nproc)
+sudo make install
+sudo ldconfig
+
+#### **3\. Clone and Run PipeDreams**
+
+git clone https://github.com/sworrl/pipedreams
+cd pipedreams
 python3 pipedreams.py
 
-#### **3\. Optional: Install System-Wide**
+#### **4\. Optional: Install System-Wide**
 
-sudo cp pipedreams.py /usr/local/share/  
-sudo chmod \+x /usr/local/share/pipedreams.py  
+sudo cp pipedreams.py /usr/local/share/
+sudo chmod \+x /usr/local/share/pipedreams.py
 sudo ln \-sf /usr/local/share/pipedreams.py /usr/local/bin/pipedreams
 
 ## **💻 Usage**
