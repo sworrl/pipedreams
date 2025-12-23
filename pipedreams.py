@@ -30,6 +30,9 @@ import multiprocessing
 from concurrent.futures import ThreadPoolExecutor
 import fcntl
 
+# Fix Wayland rendering duplication bug - force X11 mode
+os.environ['QT_QPA_PLATFORM'] = 'xcb'
+
 # Enable NumPy multi-threading for FFT operations
 os.environ['OMP_NUM_THREADS'] = str(multiprocessing.cpu_count())
 os.environ['OPENBLAS_NUM_THREADS'] = str(multiprocessing.cpu_count())
@@ -69,13 +72,63 @@ except ImportError:
 import ctypes
 import glob
 
-# ProjectM library bindings
+# ProjectM library bindings - libprojectM 4.x API
 try:
-    libprojectm = ctypes.CDLL('/lib/libprojectM.so.2')
+    libprojectm = ctypes.CDLL('/usr/local/lib/libprojectM-4.so.4')
+
+    # Define opaque handle type
+    projectm_handle = ctypes.c_void_p
+
+    # Core functions
+    libprojectm.projectm_create.argtypes = []
+    libprojectm.projectm_create.restype = projectm_handle
+
+    libprojectm.projectm_destroy.argtypes = [projectm_handle]
+    libprojectm.projectm_destroy.restype = None
+
+    # Rendering functions
+    libprojectm.projectm_opengl_render_frame.argtypes = [projectm_handle]
+    libprojectm.projectm_opengl_render_frame.restype = None
+
+    # Audio functions
+    libprojectm.projectm_pcm_add_float.argtypes = [
+        projectm_handle,
+        ctypes.POINTER(ctypes.c_float),
+        ctypes.c_uint,
+        ctypes.c_int  # channels: 1=mono, 2=stereo
+    ]
+    libprojectm.projectm_pcm_add_float.restype = None
+
+    # Preset functions
+    libprojectm.projectm_load_preset_file.argtypes = [
+        projectm_handle,
+        ctypes.c_char_p,
+        ctypes.c_bool
+    ]
+    libprojectm.projectm_load_preset_file.restype = None
+
+    # Parameter functions
+    libprojectm.projectm_set_window_size.argtypes = [
+        projectm_handle,
+        ctypes.c_size_t,
+        ctypes.c_size_t
+    ]
+    libprojectm.projectm_set_window_size.restype = None
+
+    libprojectm.projectm_set_preset_duration.argtypes = [projectm_handle, ctypes.c_double]
+    libprojectm.projectm_set_preset_duration.restype = None
+
+    libprojectm.projectm_set_fps.argtypes = [projectm_handle, ctypes.c_int32]
+    libprojectm.projectm_set_fps.restype = None
+
+    libprojectm.projectm_set_preset_locked.argtypes = [projectm_handle, ctypes.c_bool]
+    libprojectm.projectm_set_preset_locked.restype = None
+
     PROJECTM_AVAILABLE = True
-except OSError:
+except (OSError, AttributeError) as e:
     PROJECTM_AVAILABLE = False
     libprojectm = None
+    print(f"ProjectM library not available: {e}")
 
 
 class AudioMonitor(QThread):
@@ -383,11 +436,11 @@ class SpectrumAnalyzerWidget(QWidget):
         self.last_peak_freqs = set()  # Track which frequencies already have labels
 
         # Spectrum settings (adjustable by user)
-        self.spectrum_scale = 0.010  # Base scaling multiplier
+        self.spectrum_scale = 0.5  # Base scaling multiplier (increased 10x for visibility)
         self.spectrum_max_height = 1.0  # Maximum bar height (0-1) - 100%
-        self.use_auto_gain = False  # Enable/disable AGC
-        self.agc_target = 0.7  # Target peak level for AGC
-        self.agc_speed = 0.1  # How fast AGC adapts
+        self.use_auto_gain = True  # Enable/disable AGC (enabled by default)
+        self.agc_target = 0.75  # Target peak level for AGC
+        self.agc_speed = 0.05  # How fast AGC adapts (slower = less CPU)
 
         # Automatic gain control
         self.gain = 1.0  # Current gain multiplier
@@ -819,13 +872,31 @@ class SpectrumAnalyzerWidget(QWidget):
         """Classic Winamp-style bars"""
         width = self.width()
         height = self.height()
+
+        # Debug: Print dimensions once
+        if not hasattr(self, '_debug_printed'):
+            print(f"DEBUG Spectrum Widget: width={width}, height={height}, spectrum values: min={self.spectrum.min():.4f}, max={self.spectrum.max():.4f}")
+            self._debug_printed = True
+
         num_bars = len(self.spectrum)
         bar_width = width / num_bars
-        gap = 2
+
+        # Adaptive gap - reduce gap when window is narrow to prevent bars from disappearing
+        if bar_width < 3:
+            gap = 0  # No gap for very narrow bars
+        elif bar_width < 5:
+            gap = 1  # Small gap for narrow bars
+        else:
+            gap = 2  # Normal gap for wide bars
 
         for i, level in enumerate(self.spectrum):
             x = int(i * bar_width)
-            bar_height = int(level * height * 0.9)
+            # Ensure bars are visible - use full height multiplier
+            bar_height = int(level * height)
+
+            # Clamp to widget height
+            if bar_height > height:
+                bar_height = height
 
             # Classic green gradient
             if level > 0.8:
@@ -839,24 +910,28 @@ class SpectrumAnalyzerWidget(QWidget):
             else:
                 color = QColor(0, 128, 0)
 
+            # Calculate bar width, ensure it's at least 1 pixel
+            actual_bar_width = max(1, int(bar_width - gap * 2))
+
             painter.fillRect(
                 x + gap,
                 height - bar_height,
-                int(bar_width - gap * 2),
+                actual_bar_width,
                 bar_height,
                 QBrush(color)
             )
 
-            # Draw segments (LED style)
-            segment_height = 3
-            for y in range(height - bar_height, height, segment_height + 1):
-                painter.fillRect(
-                    x + gap,
-                    y,
-                    int(bar_width - gap * 2),
-                    segment_height,
-                    QBrush(QColor(0, 0, 0))
-                )
+            # Draw segments (LED style) - only if bars are wide enough
+            if actual_bar_width > 2:
+                segment_height = 3
+                for y in range(height - bar_height, height, segment_height + 1):
+                    painter.fillRect(
+                        x + gap,
+                        y,
+                        actual_bar_width,
+                        segment_height,
+                        QBrush(QColor(0, 0, 0))
+                    )
 
     def draw_winamp_fire(self, painter):
         """Classic Winamp fire bars with fire gradient, noise, particles, and smoke"""
@@ -2557,15 +2632,7 @@ class ProjectMWidget(QWidget):
         # Initialize UI
         self.init_ui()
 
-        # Timer for rendering
-        self.render_timer = QTimer()
-        self.render_timer.timeout.connect(self.update_visualization)
-        self.render_timer.start(16)  # ~60 FPS
-
-        # Timer for auto preset switching
-        self.switch_timer = QTimer()
-        self.switch_timer.timeout.connect(self.auto_switch_preset)
-        self.switch_timer.start(1000)  # Check every second
+        # No timers needed since ProjectM runs in separate window
 
     def init_fallback_ui(self):
         """Show message when ProjectM is not available"""
@@ -2586,82 +2653,53 @@ class ProjectMWidget(QWidget):
             self.init_fallback_ui()
 
     def init_ui(self):
-        """Initialize the UI"""
+        """Initialize the UI with native OpenGL ProjectM widget"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Embedded ProjectM widget
-        self.gl_widget = QWidget()
-        self.gl_widget.setMinimumSize(400, 300)
-        self.gl_widget.setStyleSheet("background-color: black;")
-
-        # Make widget a native window for X11 embedding
-        self.gl_widget.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
-        self.gl_widget.setAttribute(Qt.WidgetAttribute.WA_DontCreateNativeAncestors)
-
+        # Create native OpenGL ProjectM widget - the Winamp way!
+        self.gl_widget = ProjectMGLWidget(self)
+        self.gl_widget.setMinimumHeight(200)
         layout.addWidget(self.gl_widget)
 
-        # Track projectM process and window
-        self.projectm_process = None
-        self.projectm_embedded = False
-        self.projectm_wid = None
-
-        # Install event filter to track resize events
-        self.gl_widget.installEventFilter(self)
-
-        # Controls
+        # Preset controls
         controls_layout = QHBoxLayout()
-        controls_layout.addStretch()
+        controls_layout.setContentsMargins(10, 5, 10, 5)
 
-        # Start/Stop button
-        self.toggle_btn = QPushButton("▶ Start ProjectM")
-        self.toggle_btn.setStyleSheet("""
+        # Previous preset button
+        prev_btn = QPushButton("◀ Prev")
+        prev_btn.clicked.connect(self.previous_preset)
+        prev_btn.setStyleSheet("""
             QPushButton {
-                font-size: 14px;
-                padding: 8px 16px;
+                font-size: 12px;
+                padding: 4px 12px;
                 background-color: #00d4ff;
                 color: #000000;
                 border: none;
                 border-radius: 4px;
-                font-weight: bold;
             }
-            QPushButton:hover {
-                background-color: #00a8cc;
-            }
-            QPushButton:pressed {
-                background-color: #007a99;
-            }
+            QPushButton:hover { background-color: #00a8cc; }
         """)
-        self.toggle_btn.clicked.connect(self.toggle_projectm)
-        controls_layout.addWidget(self.toggle_btn)
+        controls_layout.addWidget(prev_btn)
 
-        # Pop-out button
-        popout_btn = QPushButton("⬈ Pop Out")
-        popout_btn.setStyleSheet("""
+        # Next preset button
+        next_btn = QPushButton("Next ▶")
+        next_btn.clicked.connect(self.next_preset)
+        next_btn.setStyleSheet("""
             QPushButton {
-                font-size: 14px;
-                padding: 8px 16px;
-                background-color: #444;
-                color: #ffffff;
+                font-size: 12px;
+                padding: 4px 12px;
+                background-color: #00d4ff;
+                color: #000000;
                 border: none;
                 border-radius: 4px;
             }
-            QPushButton:hover {
-                background-color: #555;
-            }
+            QPushButton:hover { background-color: #00a8cc; }
         """)
-        popout_btn.clicked.connect(self.pop_out_window)
-        controls_layout.addWidget(popout_btn)
+        controls_layout.addWidget(next_btn)
 
         controls_layout.addStretch()
         layout.addLayout(controls_layout)
-
-        # Context menu for GL widget
-        if hasattr(self, 'gl_widget'):
-            self.gl_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            self.gl_widget.customContextMenuRequested.connect(self.show_context_menu)
-
-        self.fullscreen_window = None
 
     def change_preset(self, index):
         """Change to selected preset"""
@@ -2672,16 +2710,24 @@ class ProjectMWidget(QWidget):
                 self.gl_widget.load_preset(self.presets[index])
 
     def next_preset(self):
-        """Switch to next preset - not used for standalone projectM"""
-        pass
+        """Switch to next preset"""
+        if len(self.presets) == 0:
+            return
+
+        self.current_preset_index = (self.current_preset_index + 1) % len(self.presets)
+        self.change_preset(self.current_preset_index)
 
     def previous_preset(self):
-        """Switch to previous preset - not used for standalone projectM"""
-        pass
+        """Switch to previous preset"""
+        if len(self.presets) == 0:
+            return
+
+        self.current_preset_index = (self.current_preset_index - 1) % len(self.presets)
+        self.change_preset(self.current_preset_index)
 
     def toggle_auto_switch(self, enabled):
-        """Toggle auto preset switching - not used for standalone projectM"""
-        pass
+        """Toggle auto preset switching"""
+        self.auto_switch = enabled
 
     def auto_switch_preset(self):
         """Auto-switch presets after duration - not used for standalone projectM"""
@@ -2704,258 +2750,236 @@ class ProjectMWidget(QWidget):
         if hasattr(self, 'gl_widget'):
             self.gl_widget.update()
 
-    def show_context_menu(self, position):
-        """Show context menu for fullscreen/windowed mode"""
-        menu = QMenu(self)
-
-        fullscreen_action = menu.addAction("⛶ Toggle Fullscreen")
-        fullscreen_action.triggered.connect(self.toggle_fullscreen)
-
-        popout_action = menu.addAction("⬈ Pop Out Window")
-        popout_action.triggered.connect(self.pop_out_window)
-
-        menu.exec(self.gl_widget.mapToGlobal(position))
-
-    def toggle_fullscreen(self):
-        """Toggle fullscreen mode for GL widget"""
+    def cleanup(self):
+        """Clean up resources"""
         if hasattr(self, 'gl_widget'):
-            if self.gl_widget.isFullScreen():
-                self.gl_widget.showNormal()
-            else:
-                self.gl_widget.showFullScreen()
-
-    def toggle_projectm(self):
-        """Start or stop embedded ProjectM"""
-        if self.projectm_process and self.projectm_process.poll() is None:
-            # ProjectM is running, stop it
-            self.projectm_process.terminate()
-            self.projectm_process.wait(timeout=2)
-            self.projectm_process = None
-            self.projectm_embedded = False
-            self.toggle_btn.setText("▶ Start ProjectM")
-            print("Stopped projectM")
-        else:
-            # Start ProjectM embedded
-            import subprocess
-            import shutil
-
-            projectm_path = shutil.which('projectm')
-            if not projectm_path:
-                QMessageBox.warning(
-                    self,
-                    "ProjectM Not Found",
-                    "ProjectM is not installed or not in PATH."
-                )
-                return
-
-            try:
-                # Get the window ID of the container widget
-                wid = int(self.gl_widget.winId())
-
-                # Launch projectM with window embedding
-                # Use --window-id to embed into our widget
-                self.projectm_process = subprocess.Popen(
-                    [projectm_path],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
-
-                # Give it time to start
-                QTimer.singleShot(500, lambda: self.embed_projectm_window(wid))
-
-                self.toggle_btn.setText("⏹ Stop ProjectM")
-                print(f"Started projectM (PID: {self.projectm_process.pid})")
-            except Exception as e:
-                print(f"Failed to start projectM: {e}")
-                QMessageBox.warning(self, "Start Failed", f"Failed to start projectM:\n{e}")
-
-    def embed_projectm_window(self, parent_wid):
-        """Embed the projectM window using xdotool"""
-        import subprocess
-        import time
-
-        # Find projectM window
-        try:
-            # Wait for window to appear
-            for _ in range(10):  # Try for 5 seconds
-                result = subprocess.run(
-                    ['xdotool', 'search', '--name', 'projectM'],
-                    capture_output=True,
-                    text=True
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    projectm_wid = result.stdout.strip().split()[0]
-
-                    # Reparent the window
-                    subprocess.run(['xdotool', 'windowreparent', projectm_wid, str(parent_wid)])
-                    subprocess.run(['xdotool', 'windowmove', projectm_wid, '0', '0'])
-
-                    # Get widget size and resize projectM
-                    width = self.gl_widget.width()
-                    height = self.gl_widget.height()
-                    subprocess.run(['xdotool', 'windowsize', projectm_wid, str(width), str(height)])
-
-                    self.projectm_wid = projectm_wid
-                    self.projectm_embedded = True
-                    print(f"Embedded projectM window {projectm_wid} into {parent_wid}")
-                    return
-                time.sleep(0.5)
-
-            print("Could not find projectM window to embed")
-        except Exception as e:
-            print(f"Failed to embed projectM window: {e}")
-
-    def eventFilter(self, obj, event):
-        """Handle resize events for the gl_widget to resize embedded projectM"""
-        if obj == self.gl_widget and event.type() == event.Type.Resize:
-            if self.projectm_embedded and self.projectm_wid:
-                # Resize the embedded projectM window and force redraw
-                import subprocess
-                width = self.gl_widget.width()
-                height = self.gl_widget.height()
-
-                # Get the global position of the gl_widget to properly position the embedded window
-                global_pos = self.gl_widget.mapToGlobal(self.gl_widget.rect().topLeft())
-
-                try:
-                    # Resize and reposition window atomically to ensure proper constraints
-                    subprocess.run(['xdotool', 'windowsize', '--sync', self.projectm_wid, str(width), str(height)], check=False)
-                    subprocess.run(['xdotool', 'windowmove', '--sync', self.projectm_wid, str(global_pos.x()), str(global_pos.y())], check=False)
-                    # Force the window manager to respect our size
-                    subprocess.run(['xdotool', 'windowsize', '--sync', self.projectm_wid, str(width), str(height)], check=False)
-                except Exception as e:
-                    print(f"Failed to resize projectM: {e}")
-        return super().eventFilter(obj, event)
-
-    def pop_out_window(self):
-        """Launch standalone projectM application and stop embedded instance"""
-        import subprocess
-        import shutil
-
-        # First, stop the embedded projectM if it's running
-        if self.projectm_process and self.projectm_process.poll() is None:
-            try:
-                self.projectm_process.terminate()
-                self.projectm_process.wait(timeout=2)
-                print("Stopped embedded projectM instance")
-            except Exception as e:
-                print(f"Failed to stop embedded projectM: {e}")
-            finally:
-                self.projectm_process = None
-                self.projectm_embedded = False
-                self.projectm_wid = None
-
-        # Check if projectM is installed
-        projectm_path = shutil.which('projectm')
-        if not projectm_path:
-            QMessageBox.warning(
-                self,
-                "ProjectM Not Found",
-                "ProjectM is not installed or not in PATH.\n\n"
-                "Please install projectM to use visualizations."
-            )
-            return
-
-        try:
-            # Launch projectM in the background
-            subprocess.Popen([projectm_path],
-                           stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL)
-            print("Launched standalone projectM visualizer")
-        except Exception as e:
-            print(f"Failed to launch projectM: {e}")
-            QMessageBox.warning(
-                self,
-                "Launch Failed",
-                f"Failed to launch projectM:\n{e}"
-            )
+            self.gl_widget.cleanup()
 
 
 class ProjectMGLWidget(QOpenGLWidget):
-    """OpenGL widget for ProjectM rendering"""
+    """OpenGL widget for ProjectM rendering - Native libprojectM integration"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.projectm_ctx = None
+        self.projectm_handle = None
         self.current_preset = None
-        self.animation_time = 0.0
+        self.initialized = False
+        self.preset_locked = False
 
-        # Timer for continuous animation
+        # Ensure we get an OpenGL 3.3 core profile context for projectM
+        from PyQt6.QtGui import QSurfaceFormat
+        gl_format = QSurfaceFormat()
+        gl_format.setVersion(3, 3)
+        gl_format.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
+        gl_format.setDepthBufferSize(24)
+        gl_format.setStencilBufferSize(8)
+        gl_format.setSwapBehavior(QSurfaceFormat.SwapBehavior.DoubleBuffer)
+        self.setFormat(gl_format)
+
+        # Enable keyboard focus
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+        # Timer for continuous animation at 60 FPS
         self.anim_timer = QTimer(self)
-        self.anim_timer.timeout.connect(self.animate)
+        self.anim_timer.timeout.connect(self.update)
         self.anim_timer.start(16)  # ~60 FPS
 
-    def animate(self):
-        """Update animation and trigger repaint"""
-        self.animation_time += 0.016  # Increment by frame time
-        self.update()  # Trigger paintGL
+    def keyPressEvent(self, event):
+        """Handle keyboard input for projectM controls"""
+        key = event.key()
+
+        # Get parent ProjectMWidget to access presets
+        parent_widget = self.parent()
+        if not parent_widget:
+            return
+
+        if key == Qt.Key.Key_N or key == Qt.Key.Key_Right:
+            # Next preset
+            if hasattr(parent_widget, 'next_preset'):
+                parent_widget.next_preset()
+        elif key == Qt.Key.Key_P or key == Qt.Key.Key_Left:
+            # Previous preset
+            if hasattr(parent_widget, 'previous_preset'):
+                parent_widget.previous_preset()
+        elif key == Qt.Key.Key_R:
+            # Random preset
+            if hasattr(parent_widget, 'presets') and len(parent_widget.presets) > 0:
+                import random
+                parent_widget.current_preset_index = random.randint(0, len(parent_widget.presets) - 1)
+                parent_widget.change_preset(parent_widget.current_preset_index)
+        elif key == Qt.Key.Key_L:
+            # Toggle preset lock
+            self.preset_locked = not self.preset_locked
+            if self.projectm_handle:
+                libprojectm.projectm_set_preset_locked(self.projectm_handle, self.preset_locked)
+        elif key == Qt.Key.Key_Space:
+            # Toggle auto-switch (in parent widget)
+            if hasattr(parent_widget, 'auto_switch'):
+                parent_widget.auto_switch = not parent_widget.auto_switch
+        else:
+            super().keyPressEvent(event)
+
+    def mousePressEvent(self, event):
+        """Focus widget on click for keyboard input"""
+        self.setFocus()
+        super().mousePressEvent(event)
 
     def initializeGL(self):
-        """Initialize OpenGL context"""
-        if not OPENGL_AVAILABLE:
+        """Initialize OpenGL context and create projectM instance"""
+        if not PROJECTM_AVAILABLE or not OPENGL_AVAILABLE:
+            print("ProjectM or OpenGL not available")
             return
 
         try:
-            # Simple black background for now - full ProjectM integration would require
-            # more complex C library bindings which is beyond simple ctypes
-            GL.glClearColor(0.0, 0.0, 0.0, 1.0)
-            GL.glEnable(GL.GL_DEPTH_TEST)
+            # Create projectM instance
+            # IMPORTANT: Must be called after OpenGL context is current
+            self.makeCurrent()
+            self.projectm_handle = libprojectm.projectm_create()
+
+            if not self.projectm_handle:
+                print("ERROR: Failed to create projectM instance")
+                print("  This usually means the OpenGL context is not properly initialized")
+                return
+
+            print(f"Successfully created projectM instance: {self.projectm_handle}")
+
+            # Configure projectM
+            libprojectm.projectm_set_window_size(
+                self.projectm_handle,
+                self.width(),
+                self.height()
+            )
+
+            # Set FPS
+            libprojectm.projectm_set_fps(self.projectm_handle, 60)
+
+            # Set preset duration to 30 seconds
+            libprojectm.projectm_set_preset_duration(self.projectm_handle, 30.0)
+
+            # Load initial preset (idle preset with projectM logo)
+            self.load_preset("idle://")
+
+            self.initialized = True
+            print("ProjectM initialization complete")
+
         except Exception as e:
-            print(f"OpenGL initialization error: {e}")
+            print(f"OpenGL/ProjectM initialization error: {e}")
+            import traceback
+            traceback.print_exc()
 
     def resizeGL(self, w, h):
-        """Handle resize"""
+        """Handle resize events"""
         if not OPENGL_AVAILABLE:
             return
+
         try:
             GL.glViewport(0, 0, w, h)
-        except:
-            pass
+
+            # Update projectM window size
+            if self.projectm_handle:
+                libprojectm.projectm_set_window_size(
+                    self.projectm_handle,
+                    w,
+                    h
+                )
+        except Exception as e:
+            print(f"Resize error: {e}")
 
     def paintGL(self):
         """Render ProjectM visualization"""
-        if not OPENGL_AVAILABLE:
+        if not OPENGL_AVAILABLE or not self.initialized or not self.projectm_handle:
+            # Fallback: clear to black
+            try:
+                GL.glClearColor(0.0, 0.0, 0.0, 1.0)
+                GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+            except:
+                pass
             return
 
         try:
-            # Clear to dark background
-            GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
-
-            # Simple placeholder visualization - rotating triangle with color cycling
-            GL.glMatrixMode(GL.GL_MODELVIEW)
-            GL.glLoadIdentity()
-            GL.glRotatef(self.animation_time * 50, 0, 0, 1)  # Rotate around Z axis
-
-            # Color cycle based on time
-            import math
-            r = (math.sin(self.animation_time * 0.5) + 1) * 0.5
-            g = (math.sin(self.animation_time * 0.7) + 1) * 0.5
-            b = (math.sin(self.animation_time * 0.9) + 1) * 0.5
-
-            GL.glBegin(GL.GL_TRIANGLES)
-            GL.glColor3f(r, 0.2, 0.5)  # Cycling red
-            GL.glVertex2f(0.0, 0.5)
-            GL.glColor3f(0.2, g, 0.5)  # Cycling green
-            GL.glVertex2f(-0.5, -0.5)
-            GL.glColor3f(0.5, 0.2, b)  # Cycling blue
-            GL.glVertex2f(0.5, -0.5)
-            GL.glEnd()
-
-            # TODO: Full ProjectM integration would call projectM render functions here
-            # This requires complex struct marshaling and callback setup via ctypes
+            # Render projectM frame
+            # This will render directly into the current OpenGL context
+            libprojectm.projectm_opengl_render_frame(self.projectm_handle)
 
         except Exception as e:
-            pass
+            print(f"Render error: {e}")
+            # Fallback rendering
+            try:
+                GL.glClearColor(0.0, 0.0, 0.0, 1.0)
+                GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+            except:
+                pass
 
     def load_preset(self, preset_path):
-        """Load a milkdrop preset"""
-        self.current_preset = preset_path
-        # TODO: Load preset file and parse it
+        """Load a milkdrop preset file"""
+        if not self.projectm_handle:
+            return
+
+        try:
+            # Convert path to bytes for C API
+            if isinstance(preset_path, str):
+                preset_bytes = preset_path.encode('utf-8')
+            else:
+                preset_bytes = preset_path
+
+            # Load preset with smooth transition
+            libprojectm.projectm_load_preset_file(
+                self.projectm_handle,
+                preset_bytes,
+                True  # smooth_transition
+            )
+
+            self.current_preset = preset_path
+            print(f"Loaded preset: {preset_path}")
+
+        except Exception as e:
+            print(f"Failed to load preset {preset_path}: {e}")
 
     def add_audio(self, audio_data):
         """Add audio samples for visualization"""
-        # TODO: Feed audio to projectM
-        pass
+        if not self.projectm_handle or not self.initialized:
+            return
+
+        try:
+            # Ensure audio_data is numpy array of float32
+            if not isinstance(audio_data, np.ndarray):
+                audio_data = np.array(audio_data, dtype=np.float32)
+            elif audio_data.dtype != np.float32:
+                audio_data = audio_data.astype(np.float32)
+
+            # Ensure values are in range [-1, 1]
+            audio_data = np.clip(audio_data, -1.0, 1.0)
+
+            # Get pointer to audio data
+            audio_ptr = audio_data.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+
+            # Add audio to projectM (mono = 1, stereo = 2)
+            # We'll use mono for simplicity
+            libprojectm.projectm_pcm_add_float(
+                self.projectm_handle,
+                audio_ptr,
+                len(audio_data),
+                1  # PROJECTM_MONO
+            )
+
+        except Exception as e:
+            print(f"Failed to add audio data: {e}")
+
+    def cleanup(self):
+        """Clean up projectM instance"""
+        if self.projectm_handle:
+            try:
+                libprojectm.projectm_destroy(self.projectm_handle)
+                print("ProjectM instance destroyed")
+            except Exception as e:
+                print(f"Error destroying projectM: {e}")
+            finally:
+                self.projectm_handle = None
+                self.initialized = False
+
+    def __del__(self):
+        """Destructor to ensure cleanup"""
+        self.cleanup()
 
 
 class EqualizerWidget(QWidget):
@@ -3651,7 +3675,7 @@ class PipeDreamsWindow(QMainWindow):
         spectrum_layout = QVBoxLayout()
         spectrum_layout.setContentsMargins(5, 5, 5, 5)
         self.spectrum_analyzer = SpectrumAnalyzerWidget()
-        self.spectrum_analyzer.setMinimumHeight(30)  # Ultra compact
+        self.spectrum_analyzer.setMinimumHeight(200)  # Ensure bars are visible
         self.spectrum_analyzer.setMaximumHeight(16777215)  # Qt max size
         self.spectrum_analyzer.setSizePolicy(
             QSizePolicy.Policy.Expanding,
@@ -4096,6 +4120,7 @@ class PipeDreamsWindow(QMainWindow):
     def update_max_height(self, value):
         self.spectrum_analyzer.spectrum_max_height = value / 100.0
         self.max_height_value_label.setText(f"{value}%")
+        self.save_app_settings()
 
     def toggle_agc(self, state):
         self.spectrum_analyzer.use_auto_gain = (state == Qt.CheckState.Checked.value)
@@ -4877,8 +4902,19 @@ def main():
     # QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseOpenGLES)
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
 
+    # Set up OpenGL surface format for projectM (requires OpenGL 3.3+ core profile)
+    from PyQt6.QtGui import QSurfaceFormat
+    gl_format = QSurfaceFormat()
+    gl_format.setVersion(3, 3)
+    gl_format.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
+    gl_format.setDepthBufferSize(24)
+    gl_format.setStencilBufferSize(8)
+    gl_format.setSwapBehavior(QSurfaceFormat.SwapBehavior.DoubleBuffer)
+    QSurfaceFormat.setDefaultFormat(gl_format)
+
     app = QApplication(sys.argv)
     app.setApplicationName("PipeDreams")
+    app.setDesktopFileName("pipedreams")  # Match .desktop file name for taskbar icon
 
     # Set application icon for taskbar/dock
     icon_paths = [
