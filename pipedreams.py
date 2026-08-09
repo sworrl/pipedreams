@@ -23,6 +23,7 @@ import sys
 import subprocess
 import os
 import json
+import socket
 from pathlib import Path
 from collections import deque
 import numpy as np
@@ -69,6 +70,8 @@ import shutil
 MILKDROPPER_REPO_URL = "https://github.com/sworrl/MilkDropper"
 MILKDROPPER_RELEASES_URL = MILKDROPPER_REPO_URL + "/releases/latest"
 MILKDROPPER_CMD_FILE = "/tmp/projectm-cmd"
+MILKDROPPER_AUDIO_SOURCE_FILE = "/tmp/projectm-audio-source"
+MILKDROPPER_SOCKET_NAME = "milkdropper-tray"
 
 APP_VERSION = "3.0.0"
 
@@ -399,6 +402,8 @@ class SpectrumAnalyzerWidget(QWidget):
         self.beat_history = deque(maxlen=100)  # Track beat timestamps
         self.last_beat_energy = 0.0
         self.beat_threshold = 1.5  # Energy threshold for beat detection
+        self.beat_adaptive_thresh = 0.2  # Dynamic peak decay threshold
+        self.last_beat_time = 0.0
         self.current_bpm = 0.0
         self.beat_pulse = 0.0  # 0-1, decays over time for visual pulse
 
@@ -499,52 +504,53 @@ class SpectrumAnalyzerWidget(QWidget):
             self.spectrum = self.spectrum * 0.5 + new_spectrum * 0.5
             self.spectrum = np.clip(self.spectrum, 0, self.spectrum_max_height)
 
-            # Beat Detection (analyze bass energy for beats)
+            # Beat Detection (analyze bass frequencies 20-250Hz with dynamic peak decay onset threshold)
             import time
-            # Focus on bass frequencies (20-200Hz) for beat detection
-            bass_energy = 0
+            current_time = time.time()
+            bass_energy = 0.0
             bass_count = 0
             for i in range(len(self.spectrum)):
                 freq = self.bar_index_to_frequency(i)
-                if 20 <= freq <= 200:
+                if 20 <= freq <= 250:
                     bass_energy += self.spectrum[i]
                     bass_count += 1
 
             if bass_count > 0:
                 bass_energy = bass_energy / bass_count
 
-                # Detect beat: significant increase in bass energy
-                if bass_energy > self.last_beat_energy * self.beat_threshold and bass_energy > 0.3:
-                    current_time = time.time()
+                # Dynamic peak-decay threshold beat detection with refractory period (0.18s max ~333 BPM)
+                thresh_floor = max(0.12, self.last_beat_energy * 1.15)
+                effective_thresh = max(self.beat_adaptive_thresh, thresh_floor)
+
+                if bass_energy > effective_thresh and (current_time - getattr(self, 'last_beat_time', 0.0)) >= 0.18:
+                    self.last_beat_time = current_time
+                    self.beat_adaptive_thresh = bass_energy * 1.15
                     self.beat_history.append(current_time)
                     self.beat_pulse = 1.0  # Trigger pulse
 
-                    # Calculate BPM from recent beats (normalized over longer window)
-                    if len(self.beat_history) >= 8:
-                        # Use last 20 beats (or available) for smoother BPM calculation
-                        recent_beats = list(self.beat_history)[-20:]
-                        if len(recent_beats) >= 2:
-                            intervals = [recent_beats[i+1] - recent_beats[i] for i in range(len(recent_beats)-1)]
-                            # Remove outliers (beats that are too fast or too slow)
-                            intervals_sorted = sorted(intervals)
-                            # Use middle 60% of intervals (remove top and bottom 20%)
-                            trim = len(intervals_sorted) // 5
-                            if trim > 0:
-                                intervals_trimmed = intervals_sorted[trim:-trim]
-                            else:
-                                intervals_trimmed = intervals_sorted
+                    # Calculate BPM using median inter-beat interval and tempo octave folding (prevents 32 BPM on 160 BPM metal)
+                    if len(self.beat_history) >= 4:
+                        beats = list(self.beat_history)
+                        intervals = [beats[i] - beats[i-1] for i in range(1, len(beats))]
+                        if intervals:
+                            median_interval = float(np.median(intervals))
+                            if 0.15 <= median_interval <= 3.0:
+                                raw_bpm = 60.0 / median_interval
 
-                            if intervals_trimmed:
-                                avg_interval = sum(intervals_trimmed) / len(intervals_trimmed)
-                                if 0.2 <= avg_interval <= 2.0:  # Reasonable BPM range (30-300)
-                                    # Smooth BPM changes
-                                    new_bpm = 60.0 / avg_interval
-                                    if self.current_bpm > 0:
-                                        self.current_bpm = self.current_bpm * 0.8 + new_bpm * 0.2
-                                    else:
-                                        self.current_bpm = new_bpm
+                                # Tempo octave normalization: map sub-harmonics / missed beats to primary tempo range [75, 220]
+                                while raw_bpm < 75.0:
+                                    raw_bpm *= 2.0
+                                while raw_bpm > 220.0:
+                                    raw_bpm /= 2.0
 
-                self.last_beat_energy = self.last_beat_energy * 0.7 + bass_energy * 0.3
+                                # Exponential smoothing
+                                if self.current_bpm > 0:
+                                    self.current_bpm = self.current_bpm * 0.75 + raw_bpm * 0.25
+                                else:
+                                    self.current_bpm = raw_bpm
+
+                self.last_beat_energy = self.last_beat_energy * 0.8 + bass_energy * 0.2
+                self.beat_adaptive_thresh *= 0.94  # Fast decay of adaptive threshold per frame
 
             # Decay beat pulse
             self.beat_pulse *= 0.85
@@ -3389,12 +3395,17 @@ class PipeDreamsWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
 
-        launch_group = QGroupBox("MilkDropper")
+        launch_group = QGroupBox("MilkDropper Liveness & Launch")
         launch_layout = QHBoxLayout()
         self.milkdropper_status_label = QLabel("MilkDropper detected")
         self.milkdropper_status_label.setStyleSheet("color: #00ff88;")
         launch_layout.addWidget(self.milkdropper_status_label)
         launch_layout.addStretch()
+
+        refresh_btn = QPushButton("🔄 Refresh Status")
+        refresh_btn.setToolTip("Probe MilkDropper socket liveness")
+        refresh_btn.clicked.connect(self.refresh_milkdropper_state)
+        launch_layout.addWidget(refresh_btn)
 
         launch_btn = QPushButton("🥛 Open MilkDropper")
         launch_btn.setToolTip("Start the MilkDropper tray controller (or pop its menu if already running)")
@@ -3426,6 +3437,36 @@ class PipeDreamsWindow(QMainWindow):
         preset_layout.addStretch()
         preset_group.setLayout(preset_layout)
         layout.addWidget(preset_group)
+
+        source_group = QGroupBox("Audio Source Handoff")
+        source_layout = QVBoxLayout()
+
+        source_info = QLabel(
+            "PipeDreams can hand its selected capture device to MilkDropper's wallpaper "
+            "renderer so both visualize the exact same audio stream."
+        )
+        source_info.setWordWrap(True)
+        source_layout.addWidget(source_info)
+
+        source_btn_layout = QHBoxLayout()
+        self.milkdropper_source_label = QLabel("Current target: Active capture device")
+        self.milkdropper_source_label.setStyleSheet("color: #888;")
+        source_btn_layout.addWidget(self.milkdropper_source_label)
+        source_btn_layout.addStretch()
+
+        hand_source_btn = QPushButton("⚡ Hand Audio Source to MilkDropper")
+        hand_source_btn.setToolTip("Write PipeDreams audio source to /tmp/projectm-audio-source and send reload-audio command")
+        hand_source_btn.clicked.connect(lambda: self.hand_audio_source_to_milkdropper())
+        source_btn_layout.addWidget(hand_source_btn)
+        source_layout.addLayout(source_btn_layout)
+
+        self.milkdropper_autosync_cb = QCheckBox("Auto-sync capture device to MilkDropper on change")
+        self.milkdropper_autosync_cb.setToolTip("Automatically update MilkDropper's audio source whenever device selection changes")
+        self.milkdropper_autosync_cb.toggled.connect(lambda checked: self.save_app_settings())
+        source_layout.addWidget(self.milkdropper_autosync_cb)
+
+        source_group.setLayout(source_layout)
+        layout.addWidget(source_group)
 
         note = QLabel(
             "Visuals render on your desktop (wallpaper mode) or in MilkDropper's "
@@ -3488,12 +3529,64 @@ class PipeDreamsWindow(QMainWindow):
         layout.addStretch()
         return page
 
+    def get_milkdropper_status(self):
+        """Query MilkDropper's running state, version, and mode via socket ping (v1.2.0+ protocol).
+
+        Returns tuple: (is_installed, is_running, version, mode)
+        """
+        binary = self.find_milkdropper()
+        if not binary:
+            return (False, False, None, None)
+
+        # Probe Unix domain socket milkdropper-tray (INTEROP.md §3 protocol)
+        candidates = [
+            '/tmp/milkdropper-tray',
+            f'/run/user/{os.getuid()}/milkdropper-tray',
+        ]
+        for socket_path in candidates:
+            if os.path.exists(socket_path):
+                try:
+                    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    s.settimeout(0.5)
+                    s.connect(socket_path)
+                    s.sendall(b'ping\n')
+                    res = s.recv(256).decode('utf-8', errors='ignore').strip()
+                    s.close()
+                    if res.startswith('milkdropper'):
+                        parts = res.split()
+                        version = parts[1] if len(parts) > 1 else "1.2.0"
+                        mode = "wallpaper"
+                        for p in parts[2:]:
+                            if p.startswith('mode='):
+                                mode = p.split('=', 1)[1]
+                        return (True, True, version, mode)
+                except Exception:
+                    pass
+
+        # Fallback to process check for pre-1.2.0 or transient socket issues
+        try:
+            res = subprocess.run(['pgrep', '-f', 'milkdropper'], capture_output=True, text=True)
+            if res.returncode == 0 and res.stdout.strip():
+                return (True, True, "installed", "unknown")
+        except Exception:
+            pass
+
+        return (True, False, None, None)
+
     def refresh_milkdropper_state(self):
         """Show controls if MilkDropper is installed, install helper otherwise."""
-        installed = self.find_milkdropper() is not None
+        installed, running, version, mode = self.get_milkdropper_status()
         self.milkdropper_stack.setCurrentIndex(0 if installed else 1)
         if installed:
-            self.milkdropper_status_label.setText("MilkDropper detected ✓")
+            if running:
+                if version and version != "installed":
+                    self.milkdropper_status_label.setText(f"MilkDropper v{version} running ({mode} mode) ✓")
+                else:
+                    self.milkdropper_status_label.setText("MilkDropper running ✓")
+                self.milkdropper_status_label.setStyleSheet("color: #00ff88;")
+            else:
+                self.milkdropper_status_label.setText("MilkDropper detected (not running)")
+                self.milkdropper_status_label.setStyleSheet("color: #ffaa00;")
 
     def launch_milkdropper(self):
         """Start MilkDropper (single-instance aware: relaunching pops its menu)."""
@@ -3516,6 +3609,36 @@ class PipeDreamsWindow(QMainWindow):
             self.set_status(f"MilkDropper: {cmd}")
         except OSError as e:
             self.set_status(f"MilkDropper command failed: {e}")
+
+    def hand_audio_source_to_milkdropper(self, source_name=None):
+        """Hand PipeDreams' capture device to MilkDropper via /tmp/projectm-audio-source and reload-audio command."""
+        if not source_name:
+            if hasattr(self, 'input_combo') and self.input_combo.currentText():
+                source_name = self.input_combo.currentText().split(' (#')[0]
+            elif hasattr(self, 'output_combo') and self.output_combo.currentText():
+                sink_name = self.output_combo.currentText().split(' (#')[0]
+                source_name = f"{sink_name}.monitor"
+
+        if not source_name:
+            try:
+                res = subprocess.run(['pactl', 'get-default-sink'], capture_output=True, text=True)
+                if res.returncode == 0 and res.stdout.strip():
+                    source_name = f"{res.stdout.strip()}.monitor"
+            except Exception:
+                pass
+
+        if not source_name:
+            source_name = "default"
+
+        try:
+            with open(MILKDROPPER_AUDIO_SOURCE_FILE, 'w') as f:
+                f.write(source_name)
+            self.send_milkdropper_cmd('reload-audio')
+            self.set_status(f"Handed audio source to MilkDropper: {source_name}")
+            if hasattr(self, 'milkdropper_source_label'):
+                self.milkdropper_source_label.setText(f"Current source sent: {source_name}")
+        except OSError as e:
+            self.set_status(f"Failed to hand audio source to MilkDropper: {e}")
 
     def milkdropper_toggle_lock(self):
         """Toggle preset lock on the MilkDropper renderer."""
@@ -3650,12 +3773,29 @@ class PipeDreamsWindow(QMainWindow):
         input_group.setLayout(input_layout)
         layout.addWidget(input_group)
 
+        self.output_combo.currentIndexChanged.connect(self.on_device_selection_changed)
+        self.input_combo.currentIndexChanged.connect(self.on_device_selection_changed)
+
+        btn_bar = QHBoxLayout()
         refresh_btn = QPushButton("🔄 Refresh Devices")
         refresh_btn.clicked.connect(self.refresh_devices)
-        layout.addWidget(refresh_btn)
+        btn_bar.addWidget(refresh_btn)
+
+        send_to_md_btn = QPushButton("⚡ Hand Active Source to MilkDropper")
+        send_to_md_btn.setToolTip("Sync current audio capture source to MilkDropper wallpaper visualizer")
+        send_to_md_btn.clicked.connect(lambda: self.hand_audio_source_to_milkdropper())
+        btn_bar.addWidget(send_to_md_btn)
+        btn_bar.addStretch()
+
+        layout.addLayout(btn_bar)
 
         layout.addStretch()
         return widget
+
+    def on_device_selection_changed(self):
+        """Handle change of active input/output audio device."""
+        if getattr(self, 'milkdropper_autosync_cb', None) and self.milkdropper_autosync_cb.isChecked():
+            self.hand_audio_source_to_milkdropper()
 
     def create_spectrum_settings_tab(self):
         """Create spectrum visualization settings tab"""
@@ -3951,39 +4091,8 @@ class PipeDreamsWindow(QMainWindow):
             buffer_fill = min(1.0, self.current_audio_rms * 5.0)
             self.buffer_visualizer.update_buffer_fill(buffer_fill)
 
-            # BPM detection using onset detection
-            import time
-            current_energy = self.current_audio_rms
-            self.energy_history.append(current_energy)
-
-            # Keep only last 100 energy samples for moving average
-            if len(self.energy_history) > 100:
-                self.energy_history.pop(0)
-
-            # Detect beat: current energy significantly higher than recent average
-            if len(self.energy_history) > 10:
-                avg_energy = np.mean(self.energy_history[-20:])
-                threshold = avg_energy * 1.5  # Beat threshold
-
-                if current_energy > threshold and current_energy > self.last_beat_energy * 1.3:
-                    current_time = time.time()
-                    self.beat_times.append(current_time)
-
-                    # Keep only last 8 beats (for ~4 bars at 120 BPM)
-                    if len(self.beat_times) > 8:
-                        self.beat_times.pop(0)
-
-                    # Calculate BPM from beat intervals
-                    if len(self.beat_times) >= 4:
-                        intervals = [self.beat_times[i] - self.beat_times[i-1]
-                                   for i in range(1, len(self.beat_times))]
-                        avg_interval = np.mean(intervals)
-                        if avg_interval > 0:
-                            self.current_bpm = 60.0 / avg_interval
-                            # Clamp to reasonable range
-                            self.current_bpm = max(60, min(180, self.current_bpm))
-
-            self.last_beat_energy = current_energy
+            # Sync BPM from SpectrumAnalyzer (which uses adaptive onset detection & tempo octave folding)
+            self.current_bpm = self.spectrum_analyzer.current_bpm
 
             # Find dominant frequency
             fft = np.fft.rfft(audio_data)
@@ -4411,6 +4520,9 @@ Exists: {'Yes' if self.controller.config_file.exists() else 'No'}
                     idx = mode_map[settings['visualization_mode']]
                     self.viz_mode_dropdown.setCurrentIndex(idx)
 
+            if 'milkdropper_autosync' in settings and hasattr(self, 'milkdropper_autosync_cb'):
+                self.milkdropper_autosync_cb.setChecked(settings['milkdropper_autosync'])
+
         except Exception as e:
             print(f"Error loading app settings: {e}")
 
@@ -4424,7 +4536,8 @@ Exists: {'Yes' if self.controller.config_file.exists() else 'No'}
                 'agc_target': self.spectrum_analyzer.agc_target,
                 'agc_speed': self.spectrum_analyzer.agc_speed,
                 'spectrum_scale': self.spectrum_analyzer.spectrum_scale,
-                'visualization_mode': self.spectrum_analyzer.mode
+                'visualization_mode': self.spectrum_analyzer.mode,
+                'milkdropper_autosync': self.milkdropper_autosync_cb.isChecked() if hasattr(self, 'milkdropper_autosync_cb') else False
             }
 
             with open(self.settings_file, 'w') as f:

@@ -23,16 +23,16 @@
   <img src="https://img.shields.io/badge/Version-3.0.0-e74c3c?style=flat-square" alt="Version 3.0.0">
 </p>
 
-> Twenty visualization modes, a real parametric EQ, live buffer tuning, and a spectrum analyzer that tells you the dominant frequency and BPM of whatever's playing — all reading straight from PipeWire at up to 192kHz. The audio nerd's dashboard your desktop deserved.
+> PipeDreams provides real-time spectrum analysis with 20 visualization modes, a 10-band parametric equalizer, buffer monitoring, and PipeWire latency tuning.
 
-> **Heads up: naming & credit.** **PipeDreams** is the name of *this tool* — a control center and CPU-rendered visualizer. **[PipeWire](https://pipewire.org/)** is the audio engine underneath: every sample PipeDreams analyzes was captured, routed, and clocked by PipeWire, which is the PipeWire project's work, not ours. **[MilkDropper](https://github.com/sworrl/MilkDropper)** is PipeDreams' *sister project* for MilkDrop-style visuals on your desktop, itself powered by **[projectM](https://github.com/projectM-visualizer/projectm)**. The names are intentionally distinct so credit lands where it belongs.
+> **Naming & Credit:** **PipeDreams** is this control application and CPU-rendered visualizer. **[PipeWire](https://pipewire.org/)** is the underlying audio engine providing sample capture, routing, and timing. **[MilkDropper](https://github.com/sworrl/MilkDropper)** is PipeDreams' sister project for desktop MilkDrop visuals powered by **[projectM](https://github.com/projectM-visualizer/projectm)**.
 
 ---
 
 ## Table of contents
 
 - [What it does](#what-it-does)
-- [Standing on the shoulders of giants](#standing-on-the-shoulders-of-giants)
+- [Credits & dependencies](#credits--dependencies)
 - [Sister project: MilkDropper](#sister-project-milkdropper)
 - [Requirements](#requirements)
 - [Installation](#installation)
@@ -50,112 +50,77 @@
 
 ## What it does
 
-PipeDreams is a PyQt6 audio control center for PipeWire: **real-time spectrum
-analysis** with 20 built-in visualization modes, a professional **10-band
-parametric equalizer**, buffer/latency monitoring, and one-click PipeWire
-tuning presets.
+PipeDreams is a PyQt6 application for PipeWire audio configuration and real-time visualization:
 
-| Tab | What's in it |
+| Tab | Function |
 |---|---|
-| 📊 **Visualizer** | 20 modes, live audio scope, spectrum with peak-frequency labels |
-| 🥛 **MilkDropper** | Detect, launch, and remote-control the sister project's desktop visuals |
-| 🎧 **Devices** | Automatic audio device detection and selection |
-| 🎚️ **Equalizer** | 10 bands, 31Hz–16kHz, built-in and custom presets |
-| 🎛️ **Spectrum Settings** | FFT behaviour, peak hold, color ranges |
-| ⚡ **Performance** | PipeWire sample rate, quantum, real-time priority, tuning presets (Gaming / Music / Streaming / Quality) |
-| 🔧 **Advanced** | The knobs the other tabs are too polite to show |
+| 📊 **Visualizer** | 20 modes, audio scope, spectrum analyzer with peak-frequency indicators |
+| 🥛 **MilkDropper** | Detect, launch, and control the sister project's desktop visuals |
+| 🎧 **Devices** | Audio device detection and selection |
+| 🎚️ **Equalizer** | 10-band parametric EQ (31Hz–16kHz) with presets |
+| 🎛️ **Spectrum Settings** | FFT configuration, peak hold, color range selection |
+| ⚡ **Performance** | PipeWire sample rate, quantum, real-time priority, tuning presets (Gaming, Music, Streaming, Quality) |
+| 🔧 **Advanced** | System diagnostics and manual PipeWire configuration |
 
-### The 20 visualization modes
+### Visualization modes
 
-Classic Bars • Winamp Fire • Winamp Waterfall • Waterfall • **Liquid
-Waterfall** *(new in 3.0.0)* • **Raindrops** • Plasma • 80s VFD • 90s VFD •
-Non-Newtonian Fluid • Neon Pulse • Aurora Borealis • Lava Lamp • Matrix Rain •
-Seismograph • Kaleidoscope • Nebula • Electric Lightning • Liquid Metal •
-Rainbow Bars
+Classic Bars, Winamp Fire, Winamp Waterfall, Waterfall, Liquid Waterfall, Raindrops, Plasma, 80s VFD, 90s VFD, Non-Newtonian Fluid, Neon Pulse, Aurora Borealis, Lava Lamp, Matrix Rain, Seismograph, Kaleidoscope, Nebula, Electric Lightning, Liquid Metal, Rainbow Bars.
 
-All modes render on the **CPU** with numpy-accelerated drawing — no GPU
-required. v3.0.0 includes a performance overhaul so every mode holds its
-frame rate.
+All modes render on the CPU using NumPy for vector math.
 
 ### Audio processing
 
-- **Real-time spectrum analysis** using PipeWire audio capture (via `parec`)
-- **High-resolution audio** support up to 192kHz
-- **Buffer monitoring** with visual fill indicators
-- **Peak frequency detection** with animated labels, color-coded ranges
-- **Status bar** with device, RMS, peak levels, dominant frequency, and BPM
+- Real-time spectrum analysis using PipeWire audio capture (via `parec`)
+- Audio sample rates up to 192kHz
+- Buffer monitoring with fill indicators
+- Peak frequency detection with dynamic frequency labeling
+- Status bar displaying active device, RMS level, peak level, dominant frequency, and estimated BPM
 
 ---
 
-## Standing on the shoulders of giants
+## Credits & dependencies
 
-PipeDreams is the dashboard; other projects are the machine. Star them first.
+PipeDreams relies on external tools and libraries:
 
-### PipeWire — the engine
+### PipeWire
 
-**[PipeWire](https://pipewire.org/)** is the modern Linux multimedia engine:
-it routes, mixes, resamples and clocks every stream on the system, speaks
-PulseAudio and JACK natively, and does it with latencies the old stacks could
-only dream about. Every capture PipeDreams analyzes, every device it lists,
-every quantum it tunes — that's PipeWire's machinery. PipeDreams just puts a
-friendly cockpit in front of it (and talks to it through the standard
-`pactl`/`parec`/`pw-metadata` tooling, so your configuration stays yours).
+**[PipeWire](https://pipewire.org/)** handles audio routing, mixing, resampling, and timing. PipeDreams interacts with PipeWire through `pactl`, `parec`, and `pw-metadata` utilities.
 
-### The toolchain
+### Application toolchain
 
-- **[PyQt6](https://riverbankcomputing.com/software/pyqt/)** — the entire UI
-- **[NumPy](https://numpy.org)** — FFT and every CPU-rendered frame of all 20 modes
-- **`pulseaudio-utils`** — the `pactl`/`parec` compatibility tools that make
-  capture work identically on PipeWire and PulseAudio
+- **[PyQt6](https://riverbankcomputing.com/software/pyqt/)**: User interface framework
+- **[NumPy](https://numpy.org)**: FFT calculations and CPU visualization rendering
+- **`pulseaudio-utils`**: `pactl` and `parec` capture compatibility tools
 
-### And the sister's engine
+### Sister project engine
 
-MilkDrop-style visuals in the sister project are rendered by
-**[projectM](https://github.com/projectM-visualizer/projectm)** (LGPL-2.1+),
-the open-source reimplementation of Ryan Geiss's MilkDrop. PipeDreams doesn't
-link it — see the next section for how the two apps split the work.
+Desktop MilkDrop visuals in the sister project are rendered by **[projectM](https://github.com/projectM-visualizer/projectm)** (LGPL-2.1+). PipeDreams controls MilkDropper via interop socket files.
 
 ---
 
 ## Sister project: MilkDropper
 
-**[MilkDropper](https://github.com/sworrl/MilkDropper)** renders classic
-Winamp/MilkDrop visuals as your **live KDE Plasma wallpaper** (or a standalone
-window), driven by projectM. PipeDreams and MilkDropper are **independent** —
-install either alone — but **fully interoperable**:
+**[MilkDropper](https://github.com/sworrl/MilkDropper)** renders Winamp/MilkDrop visuals as a live KDE Plasma wallpaper or windowed application. PipeDreams and MilkDropper operate independently or together:
 
-- PipeDreams' **MilkDropper tab** detects an installed MilkDropper, launches
-  it, and remote-controls the wallpaper: Previous / Next / Random / Lock, sent
-  straight to the running renderer on every screen
-- PipeDreams can hand its **selected capture device** to the wallpaper, so
-  both visualize the same audio
-- Not installed? The tab detects whether your system uses `.deb` or `.rpm`
-  packages and points you at the right MilkDropper download
-- As of v3.0.0, PipeDreams **no longer builds or loads projectM itself** —
-  visuals belong to the sister, control belongs here
-
-The whole contract is one page in the sister repo:
-[MilkDropper's `docs/INTEROP.md`](https://github.com/sworrl/MilkDropper/blob/main/docs/INTEROP.md)
-— two files in `/tmp` and a local socket. No imports, no coupling, either app
-survives without the other.
+- PipeDreams' **MilkDropper tab** detects an installed MilkDropper instance, launches it, and controls preset selection.
+- PipeDreams forwards its selected capture device to MilkDropper.
+- Interoperability details are specified in [MilkDropper's `docs/INTEROP.md`](https://github.com/sworrl/MilkDropper/blob/main/docs/INTEROP.md).
 
 ---
 
 ## Requirements
 
-- Linux with **PipeWire** (`pipewire`, `pipewire-pulse`, and `pactl`/`parec`
-  from `pulseaudio-utils`)
-- **Python 3** with **PyQt6** and **NumPy**
-- Optional: [MilkDropper](https://github.com/sworrl/MilkDropper) for desktop
-  MilkDrop visuals
+- Linux with **PipeWire** (`pipewire`, `pipewire-pulse`, `pulseaudio-utils`)
+- **Python 3.9+** with **PyQt6** and **NumPy**
+- Optional: [MilkDropper](https://github.com/sworrl/MilkDropper) for desktop visuals
 
 ---
 
 ## Installation
 
-### From packages (recommended)
+### From packages
 
-Grab the latest release from the [releases page](https://github.com/sworrl/pipedreams/releases):
+Download packages from [Releases](https://github.com/sworrl/pipedreams/releases):
 
 ```bash
 # Debian / Ubuntu / Mint / Pop!_OS
@@ -170,10 +135,10 @@ sudo dnf install ./pipedreams-3.0.0-1.noarch.rpm
 ```bash
 git clone https://github.com/sworrl/pipedreams
 cd pipedreams
-./install.sh        # detects your distro, installs deps, installs PipeDreams
+./install.sh
 ```
 
-Or just run it in place:
+Running in place:
 
 ```bash
 sudo apt install python3-pyqt6 python3-numpy pipewire pipewire-pulse pulseaudio-utils
@@ -186,16 +151,8 @@ python3 pipedreams.py
 
 ```bash
 pipedreams              # if installed
-python3 pipedreams.py   # from a source checkout
+python3 pipedreams.py   # from source checkout
 ```
-
-PipeDreams automatically detects your default PipeWire output, captures its
-monitor source at low latency, and starts visualizing.
-
-- **Visualizer tab** — pick any of the 20 modes; audio scope and spectrum render live
-- **Equalizer tab** — 10 bands from 31Hz to 16kHz with selectable EQ curves
-- **MilkDropper tab** — control (or install) the sister project
-- **Performance tab** — PipeWire sample rate, quantum, and tuning presets
 
 Settings persist to `~/.config/pipedreams/settings.json`.
 
@@ -212,10 +169,10 @@ graph LR
     E --> F[Visualization Rendering]
 ```
 
-| Metric | Value |
+| Metric | Specification |
 | :---- | :---- |
 | Audio latency | ~10ms (configurable) |
-| Sample rate | up to 192kHz |
+| Sample rate | Up to 192kHz |
 | FFT size | 2048 samples |
 | Frame rate | 60 FPS target |
 
@@ -223,146 +180,103 @@ graph LR
 pipedreams.py
 ├── SpectrumAnalyzerWidget   # 20 visualization modes
 ├── EqualizerWidget          # 10-band parametric EQ
-├── BufferVisualizerWidget   # quantum/buffer display
-├── PipeWireController       # pw-metadata / config management
-├── PipeDreamsWindow         # main UI, MilkDropper tab
-└── AudioMonitor (QThread)   # parec capture + FFT
+├── BufferVisualizerWidget   # Quantum and buffer display
+├── PipeWireController       # pw-metadata and config management
+├── PipeDreamsWindow         # Main UI and MilkDropper tab
+└── AudioMonitor (QThread)   # parec capture and FFT calculation
 ```
 
-To add a visualization mode: implement `draw_<mode>()` in
-`SpectrumAnalyzerWidget`, add it to the `paintEvent()` dispatcher, the mode
-dropdown, and both index maps (`change_viz_mode_dropdown` and the
-settings-load `mode_map`).
+To add a visualization mode: implement `draw_<mode>()` in `SpectrumAnalyzerWidget`, add it to `paintEvent()`, the mode dropdown, and the `mode_map` dictionary.
 
 ---
 
 ## Building packages
 
 ```bash
-./packaging/build-packages.sh   # needs dpkg-deb and/or rpmbuild; output lands in dist/
+./packaging/build-packages.sh
 ```
+
+Output files land in `dist/`.
 
 ---
 
 ## Troubleshooting
 
-**Audio not detected**
+**Audio capture inactive:**
 - Check PipeWire status: `systemctl --user status pipewire`
-- List audio devices: `pw-cli ls Node`
+- List audio nodes: `pw-cli ls Node`
 
-**MilkDropper tab says "not installed" but it is**
-- PipeDreams looks for `milkdropper` on `PATH`, then `/usr/local/bin`,
-  `/usr/bin`, and `~/.local/bin`. Hit **Check Again** after installing.
+**MilkDropper tab shows disconnected state:**
+- Verify `milkdropper` executable exists in `PATH` or standard bin directories (`/usr/local/bin`, `/usr/bin`, `~/.local/bin`).
 
-**Performance issues**
+**High CPU usage:**
 1. Reduce target FPS in the Performance tab.
-2. Use simpler visualization modes (Classic, Waterfall).
-3. Disable peak-hold labels.
+2. Select simpler visualization modes (Classic, Waterfall).
+3. Disable peak-hold indicators.
 
 ---
 
 ## FAQ
 
-**Does PipeDreams need a GPU?**
-No. All 20 modes render on the CPU with NumPy. That's a feature — it runs on
-anything, including the machine whose GPU is busy rendering MilkDropper.
+**Does PipeDreams require a GPU?**
+No. All 20 visualization modes render on the CPU using NumPy.
 
-**Where did the projectM tab go?**
-Into the sister project, where it belongs. v3.0.0 replaced the embedded
-projectM renderer with the MilkDropper tab — visuals render on your desktop
-via [MilkDropper](https://github.com/sworrl/MilkDropper), and PipeDreams
-remote-controls them. Cleaner for both apps: no more compiling projectM to
-install an EQ.
+**Why was the embedded projectM renderer replaced?**
+Version 3.0.0 delegated desktop visualization rendering to [MilkDropper](https://github.com/sworrl/MilkDropper). PipeDreams acts as the control dashboard.
 
-**Do I need MilkDropper?**
-No. PipeDreams is complete on its own. The MilkDropper tab just lights up if
-the sister is installed.
+**Is MilkDropper required to use PipeDreams?**
+No. PipeDreams is fully functional on its own. The MilkDropper tab enables integration when MilkDropper is installed.
 
-**PulseAudio instead of PipeWire?**
-The capture path (`pactl`/`parec`) works on both, but the Performance tab's
-quantum/rate tuning is PipeWire-specific. PipeWire is where the party is.
-
-**Windows?**
-[No.](#platform-support)
+**Is PulseAudio supported?**
+Audio capture works on PulseAudio, but quantum and rate tuning features require PipeWire.
 
 ---
 
 ## Version history
 
-### 3.0.0 (current)
+### 3.0.0
 
-- **MilkDropper integration** — the embedded projectM tab is replaced by a
-  MilkDropper control tab. Visuals now render via the sister project (desktop
-  wallpaper or standalone window); PipeDreams no longer builds or loads
-  projectM itself.
-- **New Liquid Waterfall mode** — an actual flowing-liquid waterfall; the
-  previous mode with that name lives on as **Raindrops**.
-- **Visualization overhaul** — performance fixes across laggy modes
-  (numpy-backed rendering, cached gradients, capped particles).
-- **Packaging** — first `.deb` / `.rpm` release; simplified `install.sh`
-  (no more compiling projectM from source).
-- **Fixes** — single-instance lock no longer clobbers a running instance's
-  lock file; AGC checkbox works on PyQt6; stale debug output removed; icon
-  paths resolved for packaged installs.
-- **High-resolution audio** — 192kHz capture/analysis defaults with
-  configurable PipeWire allowed-rates.
+- **MilkDropper integration**: Embedded projectM tab replaced with MilkDropper control integration.
+- **Liquid Waterfall mode**: Added dedicated flowing liquid visualization mode.
+- **Performance overhaul**: NumPy-backed drawing optimizations and cached rendering passes across visualization modes.
+- **Packaging**: Added `.deb` and `.rpm` packaging scripts.
+- **Bug fixes**: Fixed single-instance file locking, AGC checkbox state on PyQt6, and path resolution for packaged installs.
+- **High-resolution audio**: Added 192kHz capture defaults and PipeWire rate selection.
 
 ### 2.2.3
 
-- Fixed Wayland rendering bug causing UI duplication/mirroring.
-- Fixed projectM preset navigation; enhanced Winamp Fire; improved buffer
-  fill visualization.
-
-### 2.2.x / earlier
-
-- projectM integration with X11 embedding, 10-band EQ, initial visualization
-  modes.
+- Fixed Wayland window duplication bug.
+- Improved Winamp Fire particle animation and buffer fill display.
 
 ---
 
 ## Platform support
 
-> **Linux only. That's it. That's the list.**
->
-> PipeDreams is a control center for PipeWire — an audio engine that exists
-> only on Linux. There is nothing to port: without PipeWire there is no
-> spectrum to analyze, no quantum to tune, and no monitor source to capture.
->
-> If you're on Windows and want a spectrum analyzer: your media player almost
-> certainly has one. Enjoy.
-
-macOS has CoreAudio and its own opinions. PRs welcome, but don't hold your breath.
+> PipeDreams is a control center for PipeWire, which is a Linux audio framework. Windows and macOS are not supported.
 
 ---
 
 ## Contributing
 
-PRs welcome for: new visualization modes, PipeWire integrations, EQ curves,
-packaging improvements.
+Contributions are welcome for new visualization modes, PipeWire configuration presets, EQ curves, and packaging scripts.
 
-If your idea is about MilkDrop visuals, it probably belongs in
-[MilkDropper](https://github.com/sworrl/MilkDropper) — and if it's about the
-engine itself, [projectM takes PRs too](https://github.com/projectM-visualizer/projectm).
+MilkDrop visualizer features should be submitted to [MilkDropper](https://github.com/sworrl/MilkDropper).
 
 ---
 
 ## License & credits
 
-Licensed under the **GNU GPL v3.0** — see [LICENSE](LICENSE).
+Licensed under the **GNU GPL v3.0** (see [LICENSE](LICENSE)).
 
-- **[PipeWire](https://pipewire.org/)** — the audio engine this entire application is a dashboard for
-- **[MilkDropper](https://github.com/sworrl/MilkDropper)** — sister project; desktop MilkDrop visuals
-- **[projectM](https://github.com/projectM-visualizer/projectm)** — the visualization engine behind MilkDropper (LGPL-2.1+)
-- **[PyQt6](https://riverbankcomputing.com/software/pyqt/)** / **[NumPy](https://numpy.org)** — the UI and the math
+- **[PipeWire](https://pipewire.org/)**: Audio subsystem
+- **[MilkDropper](https://github.com/sworrl/MilkDropper)**: Desktop visualizer sister project
+- **[projectM](https://github.com/projectM-visualizer/projectm)**: MilkDrop engine (LGPL-2.1+)
+- **[PyQt6](https://riverbankcomputing.com/software/pyqt/)** / **[NumPy](https://numpy.org)**: UI and mathematics
 
 ---
 
 <div align="center">
 
-**PipeDreams** is the cockpit. **[PipeWire](https://pipewire.org/)** is the engine. **[MilkDropper](https://github.com/sworrl/MilkDropper)** is the light show next door.
-
-*Built for Linux. Powered by PipeWire. Better with its sister.*
-
-🔊 [PipeWire](https://pipewire.org/) · 🥛 [MilkDropper](https://github.com/sworrl/MilkDropper) · ⬇️ [PipeDreams releases](https://github.com/sworrl/pipedreams/releases)
+🔊 [PipeWire](https://pipewire.org/) · 🥛 [MilkDropper](https://github.com/sworrl/MilkDropper) · ⬇️ [PipeDreams Releases](https://github.com/sworrl/pipedreams/releases)
 
 </div>
