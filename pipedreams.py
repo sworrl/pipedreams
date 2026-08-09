@@ -892,64 +892,52 @@ class SpectrumAnalyzerWidget(QWidget):
         self.draw_mouse_tooltip(painter)
 
     def draw_classic(self, painter):
-        """Classic Winamp-style bars"""
+        """Classic Winamp-style spectrum bars with fast batched rendering"""
         width = self.width()
         height = self.height()
 
-        num_bars = len(self.spectrum)
-        bar_width = width / num_bars
+        num_bars = min(256, max(32, width // 4))
+        bar_w = width / num_bars
+        gap = 1 if bar_w > 3 else 0
+        actual_w = max(1, int(bar_w - gap))
 
-        # Adaptive gap - reduce gap when window is narrow to prevent bars from disappearing
-        if bar_width < 3:
-            gap = 0  # No gap for very narrow bars
-        elif bar_width < 5:
-            gap = 1  # Small gap for narrow bars
-        else:
-            gap = 2  # Normal gap for wide bars
+        # Downsample spectrum to num_bars
+        smooth_spec = np.interp(np.linspace(0, len(self.spectrum) - 1, num_bars),
+                                    np.arange(len(self.spectrum)), self.spectrum)
 
-        for i, level in enumerate(self.spectrum):
-            x = int(i * bar_width)
-            # Ensure bars are visible - use full height multiplier
-            bar_height = int(level * height)
+        # Pre-cache gradient brushes if needed
+        if not hasattr(self, '_classic_brush_green'):
+            self._classic_brush_green = QBrush(QColor(0, 220, 100))
+            self._classic_brush_yellow = QBrush(QColor(240, 220, 0))
+            self._classic_brush_orange = QBrush(QColor(255, 140, 0))
+            self._classic_brush_red = QBrush(QColor(255, 40, 40))
 
-            # Clamp to widget height
-            if bar_height > height:
-                bar_height = height
+        painter.setPen(Qt.PenStyle.NoPen)
+        for i in range(num_bars):
+            level = smooth_spec[i] / self.spectrum_max_height
+            if level <= 0.005:
+                continue
+            bar_h = int(level * height)
+            x = int(i * bar_w)
+            y = height - bar_h
 
-            # Classic green gradient
             if level > 0.8:
-                color = QColor(255, 0, 0)
+                brush = self._classic_brush_red
             elif level > 0.6:
-                color = QColor(255, 128, 0)
-            elif level > 0.4:
-                color = QColor(255, 255, 0)
-            elif level > 0.2:
-                color = QColor(0, 255, 0)
+                brush = self._classic_brush_orange
+            elif level > 0.3:
+                brush = self._classic_brush_yellow
             else:
-                color = QColor(0, 128, 0)
+                brush = self._classic_brush_green
 
-            # Calculate bar width, ensure it's at least 1 pixel
-            actual_bar_width = max(1, int(bar_width - gap * 2))
+            painter.setBrush(brush)
+            painter.drawRect(x, y, actual_w, bar_h)
 
-            painter.fillRect(
-                x + gap,
-                height - bar_height,
-                actual_bar_width,
-                bar_height,
-                QBrush(color)
-            )
-
-            # Draw segments (LED style) - only if bars are wide enough
-            if actual_bar_width > 2:
-                segment_height = 3
-                for y in range(height - bar_height, height, segment_height + 1):
-                    painter.fillRect(
-                        x + gap,
-                        y,
-                        actual_bar_width,
-                        segment_height,
-                        QBrush(QColor(0, 0, 0))
-                    )
+        # LED segment grid overlay (drawn in a single fast line pass)
+        if actual_w >= 3:
+            painter.setPen(QPen(QColor(0, 0, 0, 140), 1))
+            for seg_y in range(0, height, 4):
+                painter.drawLine(0, seg_y, width, seg_y)
 
     def draw_winamp_fire(self, painter):
         """Classic Winamp fire bars with fire gradient, noise, particles, and smoke"""
@@ -1696,125 +1684,99 @@ class SpectrumAnalyzerWidget(QWidget):
         painter.setOpacity(1.0)
 
     def draw_vfd_80s(self, painter):
-        """80s VFD (Vacuum Fluorescent Display) - Authentic cyan phosphor glow"""
+        """80s VFD - Cyan phosphor segmented display (high-performance 60 FPS)"""
         width = self.width()
         height = self.height()
 
-        # Vectorized: build the phosphor field in numpy at half width (bars are
-        # chunky anyway), full height (keeps segments crisp), one drawImage.
-        from PyQt6.QtGui import QImage
-        from PyQt6.QtCore import QRect
+        num_cols = min(80, max(20, width // 10))
+        col_w = width / num_cols
+        gap = 2 if col_w > 5 else 1
+        actual_w = max(2, int(col_w - gap))
 
-        sw = min(width, max(4, width // 2))
+        num_segs = max(8, min(24, height // 14))
+        seg_h = max(2, (height - num_segs * 2) // num_segs)
 
-        # Per-display-column level (nearest-neighbor keeps the blocky bar look)
-        col_idx = np.minimum(np.arange(sw) * len(self.spectrum) // sw,
-                             len(self.spectrum) - 1)
-        levels = self.spectrum[col_idx].astype(np.float32)
-        bar_heights = (levels * height * 0.88).astype(np.int32)
+        smooth_spec = np.interp(np.linspace(0, len(self.spectrum) - 1, num_cols),
+                                    np.arange(len(self.spectrum)), self.spectrum)
 
-        ys = np.arange(height, dtype=np.int32)[:, None]
-        y_off = height - 1 - ys  # distance from bottom
-        lit = (ys >= (height - bar_heights)[None, :]) & (bar_heights[None, :] > 5)
+        if not hasattr(self, '_vfd80_brushes'):
+            self._vfd80_brushes = []
+            self._vfd80_dim_brushes = []
+            for s in range(24):
+                frac = s / 24.0
+                if frac > 0.8:
+                    col = QColor(0, 255, 255)
+                elif frac > 0.5:
+                    col = QColor(0, 220, 220)
+                else:
+                    col = QColor(0, 170, 180)
+                self._vfd80_brushes.append(QBrush(col))
+                self._vfd80_dim_brushes.append(QBrush(QColor(0, 30, 35)))
 
-        # Segmented look: 3px segment + 2px gap, brightness dimmer per segment upward
-        seg_rows = (y_off % 5) < 3
-        brightness = np.clip(np.float32(1.0) - (y_off // 5) * np.float32(0.03),
-                             0, 1).astype(np.float32)
+        painter.setPen(Qt.PenStyle.NoPen)
+        for c in range(num_cols):
+            x = int(c * col_w)
+            level = smooth_spec[c] / self.spectrum_max_height
+            lit_segs = int(level * num_segs)
 
-        # Cyan phosphor color per column by level
-        conds = [levels > 0.7, levels > 0.4]
-        main_g = np.select(conds, [255, 200], 140).astype(np.float32)
-        main_b = np.select(conds, [255, 220], 160).astype(np.float32)
-
-        # Bloom/glow: lit segments dilated by 1px, cyan at reduced alpha
-        seg_mask = lit & seg_rows
-        glow_mask = seg_mask | np.roll(seg_mask, 1, axis=1) | np.roll(seg_mask, -1, axis=1)
-        glow_mask |= np.roll(glow_mask, 1, axis=0) | np.roll(glow_mask, -1, axis=0)
-        glow_alpha = np.float32(0.6 * (120.0 / 255.0))
-
-        glow_b_layer = glow_mask * brightness  # shared spatial glow field
-        img = np.empty((height, sw, 3), dtype=np.float32)
-        img[:, :, 0] = 5.0
-        img[:, :, 1] = 10 + glow_b_layer * (np.float32(180) * glow_alpha)
-        img[:, :, 2] = 12 + glow_b_layer * (np.float32(200) * glow_alpha)
-
-        img[:, :, 1] = np.where(seg_mask, main_g[None, :] * brightness, img[:, :, 1])
-        img[:, :, 2] = np.where(seg_mask, main_b[None, :] * brightness, img[:, :, 2])
-
-        # Subtle scan line effect (CRT-like)
-        img[::2, :, :] *= np.float32(0.92)
-
-        img_data = np.clip(img, 0, 255).astype(np.uint8)
-        qimg = QImage(img_data.tobytes(), sw, height, sw * 3, QImage.Format.Format_RGB888)
-        painter.drawImage(QRect(0, 0, width, height), qimg)
+            for s in range(num_segs):
+                seg_idx = min(23, int((s / num_segs) * 24))
+                y = height - (s + 1) * (seg_h + 2)
+                if s < lit_segs:
+                    painter.setBrush(self._vfd80_brushes[seg_idx])
+                else:
+                    painter.setBrush(self._vfd80_dim_brushes[seg_idx])
+                painter.drawRect(x, y, actual_w, seg_h)
 
     def draw_vfd_90s(self, painter):
-        """90s VFD - Authentic green/amber phosphor with high detail"""
+        """90s VFD - Authentic green/amber/red phosphor display (high-performance 60 FPS)"""
         width = self.width()
         height = self.height()
 
-        # Vectorized: build the phosphor field in numpy at half width (bars are
-        # chunky anyway), full height (keeps scan lines crisp), one drawImage.
-        from PyQt6.QtGui import QImage
-        from PyQt6.QtCore import QRect
+        num_cols = min(96, max(24, width // 8))
+        col_w = width / num_cols
+        gap = 2 if col_w > 4 else 1
+        actual_w = max(2, int(col_w - gap))
 
-        sw = min(width, max(4, width // 2))
+        num_segs = max(8, min(32, height // 12))
+        seg_h = max(2, (height - num_segs * 2) // num_segs)
 
-        # Per-display-column level (nearest-neighbor keeps the blocky bar look)
-        col_idx = np.minimum(np.arange(sw) * len(self.spectrum) // sw,
-                             len(self.spectrum) - 1)
-        levels = self.spectrum[col_idx].astype(np.float32)
-        bar_heights = (levels * height * 0.9).astype(np.int32)
+        smooth_spec = np.interp(np.linspace(0, len(self.spectrum) - 1, num_cols),
+                                    np.arange(len(self.spectrum)), self.spectrum)
 
-        ys = np.arange(height, dtype=np.int32)[:, None]
-        lit = (ys >= (height - bar_heights)[None, :]) & (bar_heights[None, :] > 3)
+        if not hasattr(self, '_vfd90_brushes'):
+            self._vfd90_brushes = []
+            self._vfd90_dim_brushes = []
+            for s in range(32):
+                frac = s / 32.0
+                if frac > 0.85:
+                    col = QColor(255, 50, 50)
+                    dim = QColor(60, 10, 10)
+                elif frac > 0.6:
+                    col = QColor(255, 180, 20)
+                    dim = QColor(60, 40, 5)
+                else:
+                    col = QColor(0, 255, 160)
+                    dim = QColor(0, 40, 25)
+                self._vfd90_brushes.append(QBrush(col))
+                self._vfd90_dim_brushes.append(QBrush(dim))
 
-        # 90s VFD multi-color phosphor (green base, amber peaks), per column
-        conds = [levels > 0.75, levels > 0.5, levels > 0.25]
-        main_rgb = np.stack([
-            np.select(conds, [255, 180, 50], 20),
-            np.select(conds, [180, 255, 255], 180),
-            np.select(conds, [0, 20, 80], 60),
-        ], axis=1).astype(np.float32)  # (sw, 3)
-        glow_rgb = np.stack([
-            np.select(conds, [255, 140, 30], 15),
-            np.select(conds, [140, 200, 200], 130),
-            np.select(conds, [0, 20, 60], 45),
-        ], axis=1).astype(np.float32)
+        painter.setPen(Qt.PenStyle.NoPen)
+        for c in range(num_cols):
+            x = int(c * col_w)
+            level = smooth_spec[c] / self.spectrum_max_height
+            lit_segs = int(level * num_segs)
 
-        # Brightness fades slightly toward the top of each bar
-        y_off = (height - 1 - ys).astype(np.float32)
-        fade = np.float32(1.0) - (y_off / np.maximum(bar_heights[None, :], 1)) * np.float32(0.15)
+            for s in range(num_segs):
+                seg_idx = min(31, int((s / num_segs) * 32))
+                y = height - (s + 1) * (seg_h + 2)
 
-        # Glow layer: lit area dilated by 1px left/right and 2px up, at 70% x alpha
-        glow_lit = lit | np.roll(lit, 1, axis=1) | np.roll(lit, -1, axis=1)
-        glow_lit |= np.roll(glow_lit, -2, axis=0)
-        glow_scale = np.float32(0.7 * (100.0 / 255.0))
+                if s < lit_segs:
+                    painter.setBrush(self._vfd90_brushes[seg_idx])
+                else:
+                    painter.setBrush(self._vfd90_dim_brushes[seg_idx])
 
-        base = np.array([2, 8, 2], dtype=np.float32)
-        img = np.where(glow_lit[:, :, None],
-                       base + glow_rgb[None, :, :] * glow_scale,
-                       base[None, None, :])
-
-        # Main bar with dot-matrix rows (2px lit, 1px gap)
-        bar_mask = lit & ((((height - 1 - ys) % 3) < 2))
-        img = np.where(bar_mask[:, :, None],
-                       main_rgb[None, :, :] * fade[:, :, None], img)
-
-        # Phosphor over-saturation at the top 20% of hot bars
-        peak_mask = lit & (levels[None, :] > 0.6) & \
-            (ys < (height - bar_heights + np.maximum(bar_heights // 5, 1))[None, :])
-        peak_color = np.array([255, 255, 200], dtype=np.float32) * np.float32(0.3)
-        img = np.where(peak_mask[:, :, None],
-                       img * np.float32(0.5) + peak_color[None, None, :], img)
-
-        # Subtle horizontal scan lines (CRT effect)
-        img[::3, :, :] *= np.float32(0.94)
-
-        img_data = np.clip(img, 0, 255).astype(np.uint8)
-        qimg = QImage(img_data.tobytes(), sw, height, sw * 3, QImage.Format.Format_RGB888)
-        painter.drawImage(QRect(0, 0, width, height), qimg)
+                painter.drawRect(x, y, actual_w, seg_h)
 
     def mouseMoveEvent(self, event):
         """Track mouse position for tooltip"""
@@ -1976,65 +1938,99 @@ class SpectrumAnalyzerWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
 
     def draw_lava_lamp(self, painter):
-        """Lava lamp with floating blobs"""
+        """Authentic Lava Lamp with floating, audio-reactive wax metaballs"""
+        import time
         width = self.width()
         height = self.height()
+        current_time = time.time()
 
-        if not hasattr(self, '_lava_blobs'):
+        # Container backdrop: dark ambient glass vessel
+        if not hasattr(self, '_lava_bg_brush'):
+            from PyQt6.QtGui import QLinearGradient
+            grad = QLinearGradient(0, 0, 0, height)
+            grad.setColorAt(0.0, QColor(15, 5, 30))   # Deep purple top
+            grad.setColorAt(0.7, QColor(35, 8, 40))   # Magenta mid
+            grad.setColorAt(1.0, QColor(60, 10, 25))  # Warm base heater glow
+            self._lava_bg_brush = QBrush(grad)
+
+        painter.fillRect(0, 0, width, height, self._lava_bg_brush)
+
+        # Initialize organic lava wax metaball blobs
+        if not hasattr(self, '_lava_blobs') or len(self._lava_blobs) == 0:
             self._lava_blobs = []
-
-        # Create new blobs from peaks
-        for i, level in enumerate(self.spectrum[::8]):
-            if level > self.spectrum_max_height * 0.5 and np.random.random() < 0.1:
-                x = (i * 8 / len(self.spectrum)) * width
-                size = 15 + level / self.spectrum_max_height * 40
-                velocity = -1.0 - np.random.random() * 2.0
+            for i in range(10):
                 self._lava_blobs.append({
-                    'x': x, 'y': height, 'size': size, 'velocity': velocity,
-                    'wobble_phase': np.random.random() * 2 * np.pi,
-                    'color_hue': i / (len(self.spectrum) / 8)
+                    'x': width * (0.1 + 0.8 * (i / 10)),
+                    'y': height * (0.3 + 0.6 * np.random.random()),
+                    'radius': 25.0 + np.random.random() * 35.0,
+                    'temp': np.random.random(),  # 1.0 = hot (rising), 0.0 = cold (sinking)
+                    'vy': -0.5 - np.random.random() * 1.5,
+                    'wobble_phase': np.random.random() * 6.28,
+                    'hue': np.random.random()
                 })
 
-        # Update and draw blobs
-        painter.setPen(Qt.PenStyle.NoPen)
+        # Audio energy (bass pulse heats the wax)
+        bass_level = np.mean(self.spectrum[:20]) / self.spectrum_max_height if len(self.spectrum) > 0 else 0.0
+
+        # Heat bottom pool and spawn rising thermal wax pulses on bass
+        if bass_level > 0.3 and np.random.random() < 0.2:
+            coldest = min(self._lava_blobs, key=lambda b: b['temp'])
+            coldest['temp'] = 1.0
+            coldest['vy'] = -1.2 - bass_level * 2.0
+            coldest['x'] = width * (0.15 + 0.7 * np.random.random())
+
+        # Update and draw wax metaball blobs
         from colorsys import hsv_to_rgb
-
-        new_blobs = []
         for blob in self._lava_blobs:
+            # Temperature & buoyancy physics
+            if blob['y'] < height * 0.2:
+                # Reached cooler top zone -> cool down and start sinking
+                blob['temp'] = max(0.0, blob['temp'] - 0.015)
+                blob['vy'] = min(1.0, blob['vy'] + 0.05)
+            elif blob['y'] > height * 0.8:
+                # Reached bottom heater zone -> heat up and start rising
+                blob['temp'] = min(1.0, blob['temp'] + 0.02 + bass_level * 0.05)
+                blob['vy'] = max(-1.8, blob['vy'] - 0.08)
+
             # Update position
-            blob['y'] += blob['velocity']
-            blob['wobble_phase'] += 0.05
-            wobble_x = np.sin(blob['wobble_phase']) * 15
+            blob['y'] += blob['vy']
+            blob['y'] = max(height * 0.08, min(height * 0.92, blob['y']))  # keep inside lamp
 
-            # Buoyancy - slow down as it rises
-            if blob['y'] < height * 0.3:
-                blob['velocity'] *= 0.95
+            # Liquid wobble
+            blob['wobble_phase'] += 0.04
+            wobble_x = np.sin(blob['wobble_phase'] + current_time * 2.0) * 12.0
 
-            if blob['y'] > -blob['size']:
-                # Draw blob with gradient
-                hue = (0.05 + blob['color_hue'] * 0.3) % 1.0  # Orange to red
-                r, g, b = hsv_to_rgb(hue, 0.95, 0.9)
+            # Pulse size with bass and temperature
+            current_radius = blob['radius'] * (1.0 + 0.3 * bass_level) * (0.8 + 0.4 * blob['temp'])
 
-                # Outer glow
-                painter.setOpacity(0.3)
-                glow_color = QColor(int(r * 255), int(g * 255), int(b * 255))
-                painter.setBrush(QBrush(glow_color))
-                painter.drawEllipse(int(blob['x'] + wobble_x - blob['size'] * 1.5),
-                                   int(blob['y'] - blob['size'] * 1.5),
-                                   int(blob['size'] * 3), int(blob['size'] * 3))
+            # Color: vibrant lava hue (red -> orange -> hot pink)
+            hue = (0.95 + blob['hue'] * 0.12) % 1.0
+            r, g, b = hsv_to_rgb(hue, 0.95, 1.0)
+            core_color = QColor(int(r * 255), int(g * 255), int(b * 255), 220)
+            glow_color = QColor(int(r * 255), int(g * 180), 0, 80)
 
-                # Core blob
-                painter.setOpacity(0.8)
-                core_color = QColor(int(r * 255), int(g * 255), int(b * 255))
-                painter.setBrush(QBrush(core_color))
-                painter.drawEllipse(int(blob['x'] + wobble_x - blob['size']),
-                                   int(blob['y'] - blob['size']),
-                                   int(blob['size'] * 2), int(blob['size'] * 2))
+            cx = int(blob['x'] + wobble_x)
+            cy = int(blob['y'])
+            rx = int(current_radius)
+            ry = int(current_radius * (1.2 if blob['vy'] < 0 else 0.9))  # Stretch vertically when rising!
 
-                new_blobs.append(blob)
+            # Outer glowing wax aura
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(glow_color))
+            painter.drawEllipse(cx - int(rx * 1.4), cy - int(ry * 1.4), int(rx * 2.8), int(ry * 2.8))
 
-        self._lava_blobs = new_blobs[:50]
-        painter.setOpacity(1.0)
+            # Inner vibrant wax blob
+            painter.setBrush(QBrush(core_color))
+            painter.drawEllipse(cx - rx, cy - ry, rx * 2, ry * 2)
+
+            # Specular glass highlight reflection spot
+            painter.setBrush(QBrush(QColor(255, 255, 255, 140)))
+            painter.drawEllipse(cx - int(rx * 0.4), cy - int(ry * 0.4), int(rx * 0.4), int(ry * 0.3))
+
+        # Draw glass container highlight outlines
+        painter.setPen(QPen(QColor(255, 255, 255, 30), 2))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(2, 2, width - 4, height - 4)
 
     def draw_matrix(self, painter):
         """Matrix-style falling characters"""
@@ -2098,11 +2094,12 @@ class SpectrumAnalyzerWidget(QWidget):
                 drop['chars'] = []
 
     def draw_seismograph(self, painter):
-        """Classic seismograph earthquake-style display with scrolling paper"""
+        """Seismograph earthquake-style graph with synchronized scrolling paper & centered baseline"""
         width = self.width()
         height = self.height()
+        center_y = height // 2
 
-        # Beige paper background like seismograph paper
+        # Beige graph paper background
         painter.fillRect(0, 0, width, height, QColor(245, 235, 215))
 
         if not hasattr(self, '_seismo_scroll_offset'):
@@ -2110,68 +2107,84 @@ class SpectrumAnalyzerWidget(QWidget):
         if not hasattr(self, '_seismo_history'):
             self._seismo_history = []
 
-        # Add current spectrum average to history
-        avg_level = np.mean(self.spectrum) / self.spectrum_max_height if len(self.spectrum) > 0 else 0
-        self._seismo_history.append(avg_level)
+        # Synchronized 1-pixel per frame scroll
+        self._seismo_scroll_offset += 1
 
-        # Keep history reasonable length
+        # Calculate audio deflection around baseline center_y
+        avg_level = np.mean(self.spectrum) / self.spectrum_max_height if len(self.spectrum) > 0 else 0.0
+        peak_level = np.max(self.spectrum) / self.spectrum_max_height if len(self.spectrum) > 0 else 0.0
+
+        # Seismic tremor oscillation: alternating direction around center baseline
+        if not hasattr(self, '_seismo_phase'):
+            self._seismo_phase = 0
+        self._seismo_phase = (self._seismo_phase + 1) % 2
+        sign = 1 if self._seismo_phase == 1 else -1
+
+        # Deflection from center (0 at silence, swings up and down on audio)
+        deflection = sign * (avg_level * 0.4 + (peak_level ** 1.5) * 0.5)  # Normalized [-0.9, +0.9]
+        self._seismo_history.append(deflection)
+
         if len(self._seismo_history) > width * 2:
             self._seismo_history = self._seismo_history[-width * 2:]
 
-        # Scroll offset (simulates paper moving left)
-        self._seismo_scroll_offset += 2
+        # 1. Draw Grid Lines (Synced 1-to-1 with paper scroll)
+        grid_size_x = 25
+        grid_size_y = height // 8
+        painter.setPen(QPen(QColor(200, 175, 145, 120), 1))
 
-        # Draw grid (light brown graph paper lines)
-        painter.setPen(QColor(200, 180, 150, 100))
-        grid_spacing_y = height // 10
-        grid_spacing_x = 20
-
-        # Scrolling vertical grid lines
-        for x in range(-self._seismo_scroll_offset % grid_spacing_x, width, grid_spacing_x):
+        # Vertical grid lines (scrolling left with paper)
+        start_x = -(self._seismo_scroll_offset % grid_size_x)
+        for x in range(start_x, width + grid_size_x, grid_size_x):
             painter.drawLine(x, 0, x, height)
 
         # Horizontal grid lines
-        for y in range(0, height, grid_spacing_y):
+        for y in range(0, height, grid_size_y):
             painter.drawLine(0, y, width, y)
 
-        # Draw center baseline (darker)
-        painter.setPen(QColor(150, 130, 100))
-        painter.drawLine(0, height // 2, width, height // 2)
+        # 2. Centered Zero Baseline (Darker zero line)
+        painter.setPen(QPen(QColor(140, 110, 80), 2))
+        painter.drawLine(0, center_y, width, center_y)
 
-        # Draw seismograph trace (dark reddish-brown ink) - scrolling from right to left
-        painter.setPen(QPen(QColor(120, 40, 20), 2))
-
+        # 3. Draw Seismograph Ink Trace (Synchronized 1px per point)
         history_len = len(self._seismo_history)
         if history_len > 1:
-            # Single polyline call instead of one drawLine per pixel column
             from PyQt6.QtGui import QPolygon
             from PyQt6.QtCore import QPoint
-            points = []
-            for i in range(max(0, history_len - width), history_len):
-                x_pos = width - (history_len - i)
-                if 0 <= x_pos < width:
-                    y = int(height / 2 + (self._seismo_history[i] - 0.5) * height * 0.7)
-                    points.append(QPoint(x_pos, y))
-            if len(points) > 1:
-                painter.drawPolyline(QPolygon(points))
+            pts = []
+            visible_count = min(width - 10, history_len)
+            for i in range(visible_count):
+                idx = history_len - 1 - i
+                x_pos = (width - 10) - i
+                # Deflection swings symmetrically around center_y!
+                y_pos = int(center_y + self._seismo_history[idx] * (height * 0.42))
+                y_pos = max(5, min(height - 5, y_pos))
+                pts.append(QPoint(x_pos, y_pos))
 
-        # Draw needle at right edge where new data appears
-        needle_x = width - 5
-        painter.setPen(QPen(QColor(80, 80, 80), 1))
-        painter.setBrush(QBrush(QColor(100, 100, 100)))
+            if len(pts) > 1:
+                painter.setPen(QPen(QColor(160, 20, 20), 2))  # Seismograph red ink
+                painter.drawPolyline(QPolygon(pts))
 
-        # Needle position based on current level
-        needle_y = int(height / 2 + (avg_level - 0.5) * height * 0.7)
+        # 4. Stylus / Needle Tip at Active Right Margin
+        needle_x = width - 10
+        needle_deflection = self._seismo_history[-1] if self._seismo_history else 0.0
+        needle_y = int(center_y + needle_deflection * (height * 0.42))
+        needle_y = max(5, min(height - 5, needle_y))
 
-        # Draw needle as small triangle
+        # Mechanical arm line
+        painter.setPen(QPen(QColor(60, 60, 60), 2))
+        painter.drawLine(needle_x, 0, needle_x, height)
+
+        # Needle tip triangle
         from PyQt6.QtGui import QPolygon
         from PyQt6.QtCore import QPoint
-        needle = QPolygon([
-            QPoint(needle_x + 5, needle_y),
-            QPoint(needle_x, needle_y - 3),
-            QPoint(needle_x, needle_y + 3)
+        stylus = QPolygon([
+            QPoint(needle_x + 8, needle_y),
+            QPoint(needle_x, needle_y - 4),
+            QPoint(needle_x, needle_y + 4)
         ])
-        painter.drawPolygon(needle)
+        painter.setBrush(QBrush(QColor(220, 30, 30)))
+        painter.setPen(QPen(QColor(80, 10, 10), 1))
+        painter.drawPolygon(stylus)
 
     def draw_kaleidoscope(self, painter):
         """Kaleidoscope mirror effect"""
@@ -2315,64 +2328,57 @@ class SpectrumAnalyzerWidget(QWidget):
         self._lightning_bolts = new_bolts[:30]
 
     def draw_liquid_metal(self, painter):
-        """Realistic liquid mercury effect with reflections"""
+        """Realistic liquid mercury / chrome fluid visualizer (no pink tint, high performance)"""
+        import time
         width = self.width()
         height = self.height()
+        current_time = time.time()
 
-        # Half-res simulation: mercury is soft and reflective, the upscale is
-        # invisible and the fluid math is 4x cheaper.
-        sw, sh = max(4, width // 2), max(4, height // 2)
-        if not hasattr(self, '_metal_buffer') or self._metal_buffer.shape != (sh, sw):
-            self._metal_buffer = np.zeros((sh, sw), dtype=np.float32)
+        # Half-resolution wave simulation for fast 60 FPS performance
+        sw, sh = max(8, width // 2), max(8, height // 2)
 
-        # Enhanced fluid simulation with lateral spread
-        # Gravity flow downward
-        self._metal_buffer[1:, :] += self._metal_buffer[:-1, :] * 0.4
+        if not hasattr(self, '_metal_wave') or self._metal_wave.shape != (sh, sw):
+            self._metal_wave = np.zeros((sh, sw), dtype=np.float32)
 
-        # Lateral spread for realistic pooling
-        left_flow = np.roll(self._metal_buffer, 1, axis=1) * 0.15
-        right_flow = np.roll(self._metal_buffer, -1, axis=1) * 0.15
-        self._metal_buffer += (left_flow + right_flow)
+        # Fluid wave propagation & decay
+        self._metal_wave[1:, :] += self._metal_wave[:-1, :] * 0.25
+        self._metal_wave[:-1, :] += self._metal_wave[1:, :] * 0.15
+        self._metal_wave[:, 1:] += self._metal_wave[:, :-1] * 0.15
+        self._metal_wave[:, :-1] += self._metal_wave[:, 1:] * 0.15
+        self._metal_wave *= 0.86  # Damping
 
-        # Decay
-        self._metal_buffer *= 0.88
-
-        # Add new "drops" from spectrum - fully vectorized
-        smooth_spectrum = np.interp(np.linspace(0, len(self.spectrum) - 1, sw),
+        # Inject audio energy from spectrum into the liquid metal surface
+        smooth_spec = np.interp(np.linspace(0, len(self.spectrum) - 1, sw),
                                     np.arange(len(self.spectrum)), self.spectrum)
-        intensity = (smooth_spectrum / self.spectrum_max_height).astype(np.float32)
-        drop_heights = (intensity * 13).astype(np.int32)  # 25px at full res
-        max_dh = 14
-        ys_top = np.arange(max_dh, dtype=np.float32)[:, None]
-        with np.errstate(divide='ignore', invalid='ignore'):
-            frac = np.clip(ys_top / np.maximum(drop_heights[None, :] - 1, 1), 0, 1)
-        profile = intensity[None, :] * (1.0 - 0.7 * frac)
-        profile *= (ys_top < drop_heights[None, :]) & (intensity[None, :] > 0.1)
-        top = min(max_dh, sh)
-        self._metal_buffer[:top, :] = np.maximum(self._metal_buffer[:top, :], profile[:top, :])
+        intensity = (smooth_spec / self.spectrum_max_height).astype(np.float32)
 
-        # Render with realistic metallic sheen
-        from PyQt6.QtGui import QImage
+        # Audio pulses drive fluid liquid waves from bottom & middle
+        bot_rows = min(12, sh // 3)
+        wave_profile = intensity[None, :] * np.linspace(1.0, 0.2, bot_rows, dtype=np.float32)[:, None]
+        self._metal_wave[sh - bot_rows:, :] = np.maximum(self._metal_wave[sh - bot_rows:, :], wave_profile)
 
-        # Create metallic appearance with highlights and shadows
-        # Silver base with bright highlights
-        base_silver = np.clip(self._metal_buffer * 160 + 80, 0, 255).astype(np.uint8)
+        # Metallic Chrome Color Shading (Pure Chrome / Mercury Palette)
+        val = np.clip(self._metal_wave, 0.0, 1.0)
 
-        # Add specular highlights (white reflections on peaks)
-        highlights = np.clip(self._metal_buffer ** 0.5 * 255, 0, 255).astype(np.uint8)
+        # Metallic shading model: Dark blue-steel base, silver midtones, bright chrome highlights
+        red = (val * 190.0 + (val ** 0.5) * 65.0).astype(np.uint8)
+        green = (val * 200.0 + (val ** 0.5) * 55.0 + 10.0).astype(np.uint8)
+        blue = (val * 220.0 + (val ** 0.3) * 35.0 + 20.0).astype(np.uint8)
 
-        # Slight blue tint for mercury realism
-        red = base_silver
-        green = np.clip(base_silver + 10, 0, 255).astype(np.uint8)
-        blue = highlights
+        # Add specular chrome highlights on wave peaks
+        peak_mask = val > 0.4
+        red[peak_mask] = np.clip(red[peak_mask].astype(int) + 60, 0, 255).astype(np.uint8)
+        green[peak_mask] = np.clip(green[peak_mask].astype(int) + 60, 0, 255).astype(np.uint8)
+        blue[peak_mask] = np.clip(blue[peak_mask].astype(int) + 60, 0, 255).astype(np.uint8)
 
-        # Stack RGB channels
+        # Create RGB888 image buffer (Format_RGB888 expects [R, G, B])
         img_data = np.stack([red, green, blue], axis=2)
 
+        from PyQt6.QtGui import QImage
         from PyQt6.QtCore import QRect
-        img = QImage(img_data.tobytes(), sw, sh, sw * 3, QImage.Format.Format_RGB888)
+        qimg = QImage(img_data.tobytes(), sw, sh, sw * 3, QImage.Format.Format_RGB888)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        painter.drawImage(QRect(0, 0, width, height), img)
+        painter.drawImage(QRect(0, 0, width, height), qimg)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
 
     def draw_rainbow_bars(self, painter):
