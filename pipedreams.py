@@ -24,6 +24,7 @@ import subprocess
 import os
 import json
 import socket
+import glob
 from pathlib import Path
 from collections import deque
 import numpy as np
@@ -38,14 +39,68 @@ os.environ['OMP_NUM_THREADS'] = str(multiprocessing.cpu_count())
 os.environ['OPENBLAS_NUM_THREADS'] = str(multiprocessing.cpu_count())
 os.environ['MKL_NUM_THREADS'] = str(multiprocessing.cpu_count())
 
-# Try to use GPU-accelerated libraries
-try:
-    import cupy as cp
-    GPU_AVAILABLE = True
-    print("GPU acceleration enabled via CuPy")
-except ImportError:
-    GPU_AVAILABLE = False
-    cp = None
+# Hardware GPU Detection & Acceleration
+cp = None
+torch = None
+cl = None
+
+def _detect_gpu_support():
+    """Detect hardware GPU availability and optimal acceleration library.
+    Returns tuple: (gpu_available: bool, gpu_name: str, gpu_backend: str)
+    """
+    global cp, torch, cl
+    # 1. Check CuPy (NVIDIA CUDA)
+    try:
+        import cupy as cp
+        dev_name = cp.cuda.runtime.getDeviceProperties(0)['name'].decode()
+        return True, f"NVIDIA {dev_name}", "CuPy (CUDA)"
+    except Exception:
+        cp = None
+
+    # 2. Check PyTorch CUDA
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return True, torch.cuda.get_device_name(0), "PyTorch (CUDA)"
+    except Exception:
+        torch = None
+
+    # 3. Check PyOpenCL
+    try:
+        import pyopencl as cl
+        for p in cl.get_platforms():
+            devs = p.get_devices(device_type=cl.device_type.GPU)
+            if devs:
+                return True, devs[0].name.strip(), "OpenCL"
+    except Exception:
+        cl = None
+
+    # 4. Check Linux DRM render nodes (/dev/dri/renderD*) or sysfs/lspci
+    render_nodes = glob.glob('/dev/dri/renderD*')
+    if render_nodes or os.path.exists('/proc/driver/nvidia/version'):
+        gpu_name = None
+        try:
+            res = subprocess.run(['lspci'], capture_output=True, text=True)
+            if res.returncode == 0:
+                for line in res.stdout.splitlines():
+                    if any(k in line for k in ['VGA', '3D', 'Display']):
+                        gpu_name = line.split(': ')[-1].strip()
+                        break
+        except Exception:
+            pass
+
+        if not gpu_name:
+            gpu_name = f"Hardware GPU ({render_nodes[0].split('/')[-1] if render_nodes else 'DRM'})"
+
+        return True, gpu_name, "Hardware OpenGL/DRM"
+
+    return False, "None", "CPU"
+
+GPU_AVAILABLE, GPU_NAME, GPU_BACKEND = _detect_gpu_support()
+if GPU_AVAILABLE:
+    print(f"⚡ GPU detected: {GPU_NAME} [{GPU_BACKEND}] — defaulting visualizations to GPU acceleration")
+else:
+    print("Notice: No discrete GPU hardware detected — running visualizations in multi-threaded CPU mode")
 
 try:
     from PyQt6.QtDBus import QDBusConnection, QDBusInterface
@@ -407,6 +462,9 @@ class SpectrumAnalyzerWidget(QWidget):
         self.current_bpm = 0.0
         self.beat_pulse = 0.0  # 0-1, decays over time for visual pulse
 
+        # GPU acceleration flag (defaults to True whenever a GPU is detected)
+        self.use_gpu_accel = GPU_AVAILABLE
+
         # Fire palette
         self.fire_palette = []
         for i in range(256):
@@ -432,14 +490,21 @@ class SpectrumAnalyzerWidget(QWidget):
 
     def update_audio(self, data):
         if len(data) > 0:
-            # Use GPU-accelerated FFT if available
-            if GPU_AVAILABLE:
+            # Use GPU-accelerated FFT/processing if GPU is available and enabled
+            if getattr(self, 'use_gpu_accel', GPU_AVAILABLE) and GPU_AVAILABLE:
                 try:
-                    data_gpu = cp.asarray(data)
-                    fft_gpu = cp.fft.rfft(data_gpu)
-                    magnitude = cp.abs(fft_gpu)[:len(fft_gpu)//2].get()  # Transfer back to CPU
+                    if cp is not None:
+                        data_gpu = cp.asarray(data)
+                        fft_gpu = cp.fft.rfft(data_gpu)
+                        magnitude = cp.abs(fft_gpu)[:len(fft_gpu)//2].get()
+                    elif torch is not None and torch.cuda.is_available():
+                        data_t = torch.tensor(data, device='cuda')
+                        fft_t = torch.fft.rfft(data_t)
+                        magnitude = torch.abs(fft_t)[:len(fft_t)//2].cpu().numpy()
+                    else:
+                        fft = np.fft.rfft(data)
+                        magnitude = np.abs(fft)[:len(fft)//2]
                 except Exception:
-                    # Fallback to CPU if GPU fails
                     fft = np.fft.rfft(data)
                     magnitude = np.abs(fft)[:len(fft)//2]
             else:
@@ -3874,6 +3939,34 @@ class PipeDreamsWindow(QMainWindow):
         agc_group.setLayout(agc_layout)
         layout.addWidget(agc_group)
 
+        # GPU Acceleration Group
+        gpu_group = QGroupBox("GPU Acceleration & Hardware Rendering")
+        gpu_layout = QVBoxLayout()
+
+        self.gpu_accel_cb = QCheckBox("Default Visualizations to GPU Acceleration")
+        self.gpu_accel_cb.setChecked(self.spectrum_analyzer.use_gpu_accel)
+        self.gpu_accel_cb.toggled.connect(self.toggle_gpu_accel)
+        gpu_layout.addWidget(self.gpu_accel_cb)
+
+        if GPU_AVAILABLE:
+            gpu_status_text = (
+                f"⚡ Hardware GPU detected: <b>{GPU_NAME}</b> [{GPU_BACKEND}]<br>"
+                f"<span style='color: #00ff88;'>Visualizations default to GPU acceleration automatically.</span>"
+            )
+        else:
+            gpu_status_text = (
+                f"💻 No discrete GPU hardware detected.<br>"
+                f"<span style='color: #aaaaaa;'>Visualizations running in multi-threaded CPU mode.</span>"
+            )
+
+        gpu_status_lbl = QLabel(gpu_status_text)
+        gpu_status_lbl.setWordWrap(True)
+        gpu_status_lbl.setStyleSheet("padding: 8px; background-color: #1a1a1a; border-radius: 4px;")
+        gpu_layout.addWidget(gpu_status_lbl)
+
+        gpu_group.setLayout(gpu_layout)
+        layout.addWidget(gpu_group)
+
         # Info label
         info_label = QLabel(
             "<b>Tips:</b><br>"
@@ -3898,6 +3991,11 @@ class PipeDreamsWindow(QMainWindow):
     def update_max_height(self, value):
         self.spectrum_analyzer.spectrum_max_height = value / 100.0
         self.max_height_value_label.setText(f"{value}%")
+        self.save_app_settings()
+
+    def toggle_gpu_accel(self, checked):
+        self.spectrum_analyzer.use_gpu_accel = checked
+        self.set_status(f"GPU Acceleration: {'Enabled' if checked else 'Disabled'}")
         self.save_app_settings()
 
     def toggle_agc(self, state):
@@ -4117,8 +4215,9 @@ class PipeDreamsWindow(QMainWindow):
         rms_db = 20 * np.log10(self.current_audio_rms + 1e-10)
         peak_db = 20 * np.log10(self.current_audio_peak + 1e-10)
 
-        # Build verbose status with BPM
+        # Build verbose status with BPM & GPU status
         bpm_text = f"{self.current_bpm:.0f}" if self.current_bpm > 0 else "---"
+        gpu_info = f"⚡ GPU: {GPU_NAME}" if (GPU_AVAILABLE and getattr(self.spectrum_analyzer, 'use_gpu_accel', True)) else "💻 CPU Mode"
         status = (
             f"🎵 Device: {device_name} │ "
             f"📊 RMS: {rms_db:.1f}dB │ "
@@ -4127,7 +4226,8 @@ class PipeDreamsWindow(QMainWindow):
             f"🥁 BPM: {bpm_text} │ "
             f"⚡ SR: {current['sample_rate']}Hz │ "
             f"🔲 Quantum: {current['quantum']} │ "
-            f"⏱️ Latency: {latency_ms:.1f}ms"
+            f"⏱️ Latency: {latency_ms:.1f}ms │ "
+            f"{gpu_info}"
         )
 
         self.status_label.setText(status)
@@ -4520,6 +4620,10 @@ Exists: {'Yes' if self.controller.config_file.exists() else 'No'}
                     idx = mode_map[settings['visualization_mode']]
                     self.viz_mode_dropdown.setCurrentIndex(idx)
 
+            if 'use_gpu_accel' in settings and hasattr(self, 'gpu_accel_cb'):
+                self.spectrum_analyzer.use_gpu_accel = settings['use_gpu_accel']
+                self.gpu_accel_cb.setChecked(settings['use_gpu_accel'])
+
             if 'milkdropper_autosync' in settings and hasattr(self, 'milkdropper_autosync_cb'):
                 self.milkdropper_autosync_cb.setChecked(settings['milkdropper_autosync'])
 
@@ -4537,6 +4641,7 @@ Exists: {'Yes' if self.controller.config_file.exists() else 'No'}
                 'agc_speed': self.spectrum_analyzer.agc_speed,
                 'spectrum_scale': self.spectrum_analyzer.spectrum_scale,
                 'visualization_mode': self.spectrum_analyzer.mode,
+                'use_gpu_accel': getattr(self.spectrum_analyzer, 'use_gpu_accel', GPU_AVAILABLE),
                 'milkdropper_autosync': self.milkdropper_autosync_cb.isChecked() if hasattr(self, 'milkdropper_autosync_cb') else False
             }
 
@@ -4648,6 +4753,16 @@ def main():
     except (IOError, OSError):
         print("ERROR: Another instance of PipeDreams is already running!")
         sys.exit(1)
+
+    # Enable Qt OpenGL hardware context sharing if GPU detected
+    if GPU_AVAILABLE:
+        QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+        from PyQt6.QtGui import QSurfaceFormat
+        gl_format = QSurfaceFormat()
+        gl_format.setDepthBufferSize(24)
+        gl_format.setStencilBufferSize(8)
+        gl_format.setSwapBehavior(QSurfaceFormat.SwapBehavior.DoubleBuffer)
+        QSurfaceFormat.setDefaultFormat(gl_format)
 
     app = QApplication(sys.argv)
     app.setApplicationName("PipeDreams")
