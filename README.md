@@ -23,9 +23,9 @@
   <img src="https://img.shields.io/badge/Version-3.0.0-e74c3c?style=flat-square" alt="Version 3.0.0">
 </p>
 
-> PipeDreams provides real-time spectrum analysis with 20 visualization modes, a 10-band parametric equalizer, buffer monitoring, and PipeWire latency tuning.
+> PipeDreams provides real-time spectrum analysis with 20 visualization modes, GPU hardware acceleration defaulting, a 10-band parametric equalizer, buffer monitoring, and PipeWire latency tuning.
 
-> **Naming & Credit:** **PipeDreams** is this control application and CPU-rendered visualizer. **[PipeWire](https://pipewire.org/)** is the underlying audio engine providing sample capture, routing, and timing. **[MilkDropper](https://github.com/sworrl/MilkDropper)** is PipeDreams' sister project for desktop MilkDrop visuals powered by **[projectM](https://github.com/projectM-visualizer/projectm)**.
+> **Naming & Credit:** **PipeDreams** is this control application and visualizer. **[PipeWire](https://pipewire.org/)** is the underlying audio engine providing sample capture, routing, and timing. **[MilkDropper](https://github.com/sworrl/MilkDropper)** is PipeDreams' sister project for desktop MilkDrop visuals powered by **[projectM](https://github.com/projectM-visualizer/projectm)**.
 
 ---
 
@@ -55,10 +55,10 @@ PipeDreams is a PyQt6 application for PipeWire audio configuration and real-time
 | Tab | Function |
 |---|---|
 | 📊 **Visualizer** | 20 modes, audio scope, spectrum analyzer with peak-frequency indicators |
-| 🥛 **MilkDropper** | Detect, launch, and control the sister project's desktop visuals |
-| 🎧 **Devices** | Audio device detection and selection |
-| 🎚️ **Equalizer** | 10-band parametric EQ (31Hz–16kHz) with presets |
-| 🎛️ **Spectrum Settings** | FFT configuration, peak hold, color range selection |
+| 🥛 **MilkDropper** | Detect, launch, and remote-control the sister project's desktop visuals |
+| 🎧 **Devices** | Audio device detection, selection, and MilkDropper source handoff |
+| 🎚️ **Equalizer** | 10-band parametric EQ (31Hz-16kHz) with presets |
+| 🎛️ **Spectrum Settings** | FFT configuration, GPU acceleration toggle, peak hold, color range selection |
 | ⚡ **Performance** | PipeWire sample rate, quantum, real-time priority, tuning presets (Gaming, Music, Streaming, Quality) |
 | 🔧 **Advanced** | System diagnostics and manual PipeWire configuration |
 
@@ -66,15 +66,16 @@ PipeDreams is a PyQt6 application for PipeWire audio configuration and real-time
 
 Classic Bars, Winamp Fire, Winamp Waterfall, Waterfall, Liquid Waterfall, Raindrops, Plasma, 80s VFD, 90s VFD, Non-Newtonian Fluid, Neon Pulse, Aurora Borealis, Lava Lamp, Matrix Rain, Seismograph, Kaleidoscope, Nebula, Electric Lightning, Liquid Metal, Rainbow Bars.
 
-All modes render on the CPU using NumPy for vector math.
+All modes default to GPU acceleration when a hardware GPU (NVIDIA CUDA via CuPy or PyTorch, AMD/Intel OpenCL, or Linux DRM render nodes) is detected. On systems without a discrete GPU, processing falls back to multi-threaded CPU math.
 
 ### Audio processing
 
 - Real-time spectrum analysis using PipeWire audio capture (via `parec`)
 - Audio sample rates up to 192kHz
+- Hardware GPU detection (CuPy, PyTorch, OpenCL, DRM render nodes) with default visualization acceleration
 - Buffer monitoring with fill indicators
 - Peak frequency detection with dynamic frequency labeling
-- Status bar displaying active device, RMS level, peak level, dominant frequency, and estimated BPM
+- Status bar displaying active device, RMS level, peak level, dominant frequency, estimated BPM, and GPU hardware status
 
 ---
 
@@ -175,6 +176,7 @@ graph LR
 | Sample rate | Up to 192kHz |
 | FFT size | 2048 samples |
 | Frame rate | 60 FPS target |
+| GPU acceleration | Auto-detected (NVIDIA CUDA, PyTorch, OpenCL, DRM nodes), enabled by default |
 
 ```
 pipedreams.py
@@ -219,7 +221,7 @@ Output files land in `dist/`.
 ## FAQ
 
 **Does PipeDreams require a GPU?**
-No. All 20 visualization modes render on the CPU using NumPy.
+No. PipeDreams detects hardware GPUs on startup and defaults visualizations to GPU acceleration when available, but runs in multi-threaded CPU mode when no GPU is present.
 
 **Why was the embedded projectM renderer replaced?**
 Version 3.0.0 delegated desktop visualization rendering to [MilkDropper](https://github.com/sworrl/MilkDropper). PipeDreams acts as the control dashboard.
@@ -236,11 +238,13 @@ Audio capture works on PulseAudio, but quantum and rate tuning features require 
 
 ### 3.0.0
 
-- **MilkDropper integration**: Embedded projectM tab replaced with MilkDropper control integration.
-- **Liquid Waterfall mode**: Added dedicated flowing liquid visualization mode.
-- **Performance overhaul**: NumPy-backed drawing optimizations and cached rendering passes across visualization modes.
-- **Packaging**: Added `.deb` and `.rpm` packaging scripts.
-- **Bug fixes**: Fixed single-instance file locking, AGC checkbox state on PyQt6, and path resolution for packaged installs.
+- **MilkDropper integration**: Embedded projectM tab replaced with MilkDropper control integration, version-gated socket liveness probing (`INTEROP.md` §3), and active capture device handoff.
+- **GPU acceleration**: Automatic hardware GPU detection (NVIDIA CUDA via CuPy or PyTorch, AMD/Intel OpenCL, DRM render nodes) with default GPU visualization processing and status bar monitoring.
+- **BPM detection**: Adaptive peak-decay onset thresholding and tempo octave folding to accurately estimate beat rates on dense music (preventing undercounting on heavy genres).
+- **Liquid Waterfall & Raindrops modes**: Added flowing liquid and falling rain visualization modes.
+- **Performance overhaul**: Vectorized drawing optimizations and cached rendering passes across visualization modes.
+- **Packaging**: Added `.deb` and `.rpm` packaging scripts in `packaging/build-packages.sh`.
+- **Bug fixes**: Fixed single-instance file locking (`/tmp/pipedreams.lock`), AGC checkbox state on PyQt6, and path resolution for packaged installs.
 - **High-resolution audio**: Added 192kHz capture defaults and PipeWire rate selection.
 
 ### 2.2.3
