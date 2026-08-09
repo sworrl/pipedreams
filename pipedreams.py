@@ -27,7 +27,6 @@ from pathlib import Path
 from collections import deque
 import numpy as np
 import multiprocessing
-from concurrent.futures import ThreadPoolExecutor
 import fcntl
 
 # Fix Wayland rendering duplication bug - force X11 mode
@@ -56,86 +55,36 @@ except ImportError:
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QSlider, QPushButton, QComboBox, QGroupBox, QMessageBox,
-    QTabWidget, QSpinBox, QTextEdit, QScrollArea, QButtonGroup, QRadioButton,
-    QLineEdit, QInputDialog, QCheckBox, QSizePolicy, QMenu, QStackedWidget
+    QTabWidget, QSpinBox, QTextEdit,
+    QLineEdit, QCheckBox, QSizePolicy, QStackedWidget
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
-from PyQt6.QtGui import QFont, QPalette, QColor, QPainter, QPen, QBrush, QLinearGradient, QPixmap, QIcon
-from PyQt6.QtOpenGLWidgets import QOpenGLWidget
-from PyQt6.QtOpenGL import QOpenGLVersionProfile
-try:
-    from OpenGL import GL
-    OPENGL_AVAILABLE = True
-except ImportError:
-    OPENGL_AVAILABLE = False
+from PyQt6.QtGui import QFont, QPalette, QColor, QPainter, QPen, QBrush, QLinearGradient, QPixmap, QIcon, QDesktopServices
+from PyQt6.QtCore import QUrl
+import shutil
 
-import ctypes
-import glob
+# MilkDropper (sister project) integration — visuals are rendered by
+# MilkDropper as a Plasma wallpaper / standalone window, controlled from here.
+# https://github.com/sworrl/MilkDropper
+MILKDROPPER_REPO_URL = "https://github.com/sworrl/MilkDropper"
+MILKDROPPER_RELEASES_URL = MILKDROPPER_REPO_URL + "/releases/latest"
+MILKDROPPER_CMD_FILE = "/tmp/projectm-cmd"
 
-# ProjectM library bindings - libprojectM 4.x API
-try:
-    libprojectm = ctypes.CDLL('/usr/local/lib/libprojectM-4.so.4')
+APP_VERSION = "3.0.0"
 
-    # Define opaque handle type
-    projectm_handle = ctypes.c_void_p
-
-    # Core functions
-    libprojectm.projectm_create.argtypes = []
-    libprojectm.projectm_create.restype = projectm_handle
-
-    libprojectm.projectm_destroy.argtypes = [projectm_handle]
-    libprojectm.projectm_destroy.restype = None
-
-    # Rendering functions
-    libprojectm.projectm_opengl_render_frame.argtypes = [projectm_handle]
-    libprojectm.projectm_opengl_render_frame.restype = None
-
-    # Audio functions
-    libprojectm.projectm_pcm_add_float.argtypes = [
-        projectm_handle,
-        ctypes.POINTER(ctypes.c_float),
-        ctypes.c_uint,
-        ctypes.c_int  # channels: 1=mono, 2=stereo
-    ]
-    libprojectm.projectm_pcm_add_float.restype = None
-
-    # Preset functions
-    libprojectm.projectm_load_preset_file.argtypes = [
-        projectm_handle,
-        ctypes.c_char_p,
-        ctypes.c_bool
-    ]
-    libprojectm.projectm_load_preset_file.restype = None
-
-    # Parameter functions
-    libprojectm.projectm_set_window_size.argtypes = [
-        projectm_handle,
-        ctypes.c_size_t,
-        ctypes.c_size_t
-    ]
-    libprojectm.projectm_set_window_size.restype = None
-
-    libprojectm.projectm_set_preset_duration.argtypes = [projectm_handle, ctypes.c_double]
-    libprojectm.projectm_set_preset_duration.restype = None
-
-    libprojectm.projectm_set_fps.argtypes = [projectm_handle, ctypes.c_int32]
-    libprojectm.projectm_set_fps.restype = None
-
-    libprojectm.projectm_set_preset_locked.argtypes = [projectm_handle, ctypes.c_bool]
-    libprojectm.projectm_set_preset_locked.restype = None
-
-    PROJECTM_AVAILABLE = True
-except (OSError, AttributeError) as e:
-    PROJECTM_AVAILABLE = False
-    libprojectm = None
-    print(f"ProjectM library not available: {e}")
+# Icon search order: packaged install, legacy install.sh location, source tree
+ICON_PATHS = [
+    "/usr/share/pixmaps/pipedreams.png",
+    "/usr/local/share/pixmaps/pipedreams.png",
+    str(Path(__file__).parent / "pipedreams_icon.png"),
+]
 
 
 class AudioMonitor(QThread):
     """Background thread to monitor audio levels"""
     audio_data = pyqtSignal(np.ndarray)
 
-    def __init__(self, sample_rate=48000):
+    def __init__(self, sample_rate=192000):
         super().__init__()
         self.running = False
         self.process = None
@@ -424,7 +373,7 @@ class SpectrumAnalyzerWidget(QWidget):
         self.spectrum_history = deque(maxlen=150)  # For waterfall
         self.mode = 'classic'  # classic, fire, waterfall, winamp_waterfall, plasma, vfd_80s, vfd_90s
         self.color_shift = 0  # For plasma color shifting
-        self.sample_rate = 48000  # Default, will be updated
+        self.sample_rate = 192000  # Default, will be updated
         self.peak_frequencies = []  # List of (frequency, level) tuples for top peaks
         self.mouse_pos = None  # Track mouse position for tooltip
         self.setMouseTracking(True)  # Enable mouse tracking
@@ -828,6 +777,8 @@ class SpectrumAnalyzerWidget(QWidget):
             self.draw_waterfall(painter)
         elif self.mode == 'liquid_waterfall':
             self.draw_liquid_waterfall(painter)
+        elif self.mode == 'raindrops':
+            self.draw_raindrops(painter)
         elif self.mode == 'winamp_waterfall':
             self.draw_winamp_waterfall(painter)
         elif self.mode == 'plasma':
@@ -861,7 +812,8 @@ class SpectrumAnalyzerWidget(QWidget):
 
         # Draw peak frequency labels (only on modes where it makes sense)
         modes_without_labels = ['seismograph', 'matrix', 'lava_lamp', 'aurora',
-                               'nebula', 'electric', 'kaleidoscope', 'liquid_metal', 'liquid_waterfall']
+                               'nebula', 'electric', 'kaleidoscope', 'liquid_metal',
+                               'liquid_waterfall', 'raindrops']
         if self.mode not in modes_without_labels:
             self.draw_peak_labels(painter)
 
@@ -872,11 +824,6 @@ class SpectrumAnalyzerWidget(QWidget):
         """Classic Winamp-style bars"""
         width = self.width()
         height = self.height()
-
-        # Debug: Print dimensions once
-        if not hasattr(self, '_debug_printed'):
-            print(f"DEBUG Spectrum Widget: width={width}, height={height}, spectrum values: min={self.spectrum.min():.4f}, max={self.spectrum.max():.4f}")
-            self._debug_printed = True
 
         num_bars = len(self.spectrum)
         bar_width = width / num_bars
@@ -936,7 +883,6 @@ class SpectrumAnalyzerWidget(QWidget):
     def draw_winamp_fire(self, painter):
         """Classic Winamp fire bars with fire gradient, noise, particles, and smoke"""
         import random
-        import math
         width = self.width()
         height = self.height()
 
@@ -960,17 +906,19 @@ class SpectrumAnalyzerWidget(QWidget):
             x = base_x + noise_x
 
             if bar_height > 0:
-                # Create vertical gradient: red at top, yellow at bottom
-                from PyQt6.QtGui import QLinearGradient
-                gradient = QLinearGradient(0, height - bar_height, 0, height)
+                # Cached fire gradient: ObjectMode maps 0..1 onto each rect,
+                # so one brush serves every bar height
+                if not hasattr(self, '_wf_fire_brush'):
+                    from PyQt6.QtGui import QLinearGradient, QGradient
+                    gradient = QLinearGradient(0, 0, 0, 1)
+                    gradient.setCoordinateMode(QGradient.CoordinateMode.ObjectMode)
+                    gradient.setColorAt(0, QColor(255, 50, 0))    # Red top
+                    gradient.setColorAt(0.3, QColor(255, 100, 0))  # Orange-red
+                    gradient.setColorAt(0.6, QColor(255, 180, 0))  # Orange
+                    gradient.setColorAt(1, QColor(255, 255, 0))    # Yellow bottom (hottest)
+                    self._wf_fire_brush = QBrush(gradient)
 
-                # Fire gradient: yellow (hot) at bottom, orange-red at top
-                gradient.setColorAt(0, QColor(255, 50, 0))    # Red top
-                gradient.setColorAt(0.3, QColor(255, 100, 0))  # Orange-red
-                gradient.setColorAt(0.6, QColor(255, 180, 0))  # Orange
-                gradient.setColorAt(1, QColor(255, 255, 0))    # Yellow bottom (hottest)
-
-                painter.fillRect(x, height - bar_height, max(1, int(bar_width)), bar_height, QBrush(gradient))
+                painter.fillRect(x, height - bar_height, max(1, int(bar_width)), bar_height, self._wf_fire_brush)
 
                 # Spawn ember particles from tall bars
                 if level > 0.3 and random.random() < 0.3:
@@ -1062,19 +1010,23 @@ class SpectrumAnalyzerWidget(QWidget):
         width = self.width()
         height = self.height()
 
+        # Simulate at half resolution - fire is inherently soft, so the smooth
+        # upscale is invisible and the sim is 4x cheaper.
+        sw, sh = max(4, width // 2), max(4, height // 2)
+
         # Initialize or resize fire buffer (2D heat map)
-        if not hasattr(self, '_fire_buffer') or self._fire_buffer.shape != (height, width):
-            self._fire_buffer = np.zeros((height, width), dtype=np.float32)
+        if not hasattr(self, '_fire_buffer') or self._fire_buffer.shape != (sh, sw):
+            self._fire_buffer = np.zeros((sh, sw), dtype=np.float32)
         if not hasattr(self, '_embers'):
             self._embers = []
 
         # Create heat sources from spectrum
-        heat_sources = np.interp(np.linspace(0, len(self.spectrum) - 1, width),
+        heat_sources = np.interp(np.linspace(0, len(self.spectrum) - 1, sw),
                                 np.arange(len(self.spectrum)), self.spectrum)
 
         # Add heat at bottom with noise for flickering - BOOSTED for visibility
-        noise = np.random.uniform(0.8, 1.2, width)
-        self._fire_buffer[height-1, :] = heat_sources * noise * self.spectrum_max_height * 3.0
+        noise = np.random.uniform(0.8, 1.2, sw)
+        self._fire_buffer[sh-1, :] = heat_sources * noise * self.spectrum_max_height * 3.0
 
         # Fire simulation - upward heat propagation with diffusion
         new_buffer = np.zeros_like(self._fire_buffer)
@@ -1092,14 +1044,15 @@ class SpectrumAnalyzerWidget(QWidget):
         new_buffer[1:, -1] = self._fire_buffer[:-1, -1] * 0.7
 
         # Add turbulence
-        turbulence = np.random.uniform(-0.04, 0.04, (height, width))
+        turbulence = np.random.uniform(-0.04, 0.04, (sh, sw))
         new_buffer = np.clip(new_buffer + turbulence * new_buffer, 0, 2.0)
 
         self._fire_buffer = new_buffer
 
         # Convert heat map to RGB fire colors
         from PyQt6.QtGui import QImage
-        image_data = np.zeros((height, width, 3), dtype=np.uint8)
+        from PyQt6.QtCore import QRect
+        image_data = np.zeros((sh, sw, 3), dtype=np.uint8)
 
         # Vectorized color mapping for performance
         heat = self._fire_buffer
@@ -1135,15 +1088,17 @@ class SpectrumAnalyzerWidget(QWidget):
         image_data[mask5, 1] = 255
         image_data[mask5, 2] = (80 + 175 * intensity[mask5]).astype(np.uint8)
 
-        # Draw fire image
-        fire_image = QImage(image_data.tobytes(), width, height, width * 3, QImage.Format.Format_RGB888)
-        painter.drawImage(0, 0, fire_image)
+        # Draw fire image (upscaled to full widget size)
+        fire_image = QImage(image_data.tobytes(), sw, sh, sw * 3, QImage.Format.Format_RGB888)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.drawImage(QRect(0, 0, width, height), fire_image)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
 
-        # Generate embers from hot spots
+        # Generate embers from hot spots (ember coordinates are full-res)
         painter.setPen(Qt.PenStyle.NoPen)
-        for x in range(0, width, 6):
+        for x in range(0, sw, 3):
             if heat_sources[x] > self.spectrum_max_height * 0.45 and np.random.random() < 0.25:
-                ember_x = x + np.random.uniform(-8, 8)
+                ember_x = x * 2 + np.random.uniform(-8, 8)
                 ember_y = height - 15 + np.random.uniform(-8, 8)
                 velocity_y = -np.random.uniform(1.5, 4.0)
                 velocity_x = np.random.uniform(-1.5, 1.5)
@@ -1207,42 +1162,13 @@ class SpectrumAnalyzerWidget(QWidget):
         current_spectrum = np.interp(np.linspace(0, len(self.spectrum) - 1, width),
                                      np.arange(len(self.spectrum)), self.spectrum)
 
-        # SDR waterfall color mapping (intensity -> color)
-        # Classic SDR palette: dark blue (weak) -> cyan -> green -> yellow -> red (strong)
-        for x in range(width):
-            intensity = np.clip(current_spectrum[x], 0, 1.0)
-
-            if intensity < 0.2:
-                # Very weak signal - dark blue to blue
-                t = intensity / 0.2
-                r, g, b = 0, 0, int(80 + t * 100)
-            elif intensity < 0.4:
-                # Weak signal - blue to cyan
-                t = (intensity - 0.2) / 0.2
-                r = 0
-                g = int(t * 180)
-                b = int(180 + t * 75)
-            elif intensity < 0.6:
-                # Medium signal - cyan to green
-                t = (intensity - 0.4) / 0.2
-                r = 0
-                g = 255
-                b = int(255 * (1 - t))
-            elif intensity < 0.8:
-                # Strong signal - green to yellow
-                t = (intensity - 0.6) / 0.2
-                r = int(t * 255)
-                g = 255
-                b = 0
-            else:
-                # Very strong signal - yellow to red
-                t = (intensity - 0.8) / 0.2
-                r = 255
-                g = int(255 * (1 - t))
-                b = 0
-
-            # Add to top row of buffer
-            self._waterfall_buffer[0, x] = [r, g, b]
+        # Classic SDR palette: dark blue (weak) -> cyan -> green -> yellow -> red
+        # (strong), vectorized as piecewise-linear interpolation over anchors
+        intensity = np.clip(current_spectrum, 0, 1.0)
+        anchors = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+        self._waterfall_buffer[0, :, 0] = np.interp(intensity, anchors, [0, 0, 0, 0, 255, 255])
+        self._waterfall_buffer[0, :, 1] = np.interp(intensity, anchors, [0, 0, 180, 255, 255, 0])
+        self._waterfall_buffer[0, :, 2] = np.interp(intensity, anchors, [80, 180, 255, 0, 0, 0])
 
         # Convert buffer to image
         from PyQt6.QtGui import QImage
@@ -1259,7 +1185,84 @@ class SpectrumAnalyzerWidget(QWidget):
         painter.setOpacity(1.0)
 
     def draw_liquid_waterfall(self, painter):
-        """Liquid waterfall - water flows from top to bottom with splash and ripples at bottom"""
+        """Liquid waterfall - translucent sheets of water cascading down, with
+        flow distortion, sheen highlights, and foam/mist where they land.
+
+        Fully vectorized: simulated at half resolution into a numpy flow field,
+        colormapped, and smoothly upscaled via one drawImage call."""
+        from PyQt6.QtGui import QImage
+        from PyQt6.QtCore import QRect
+
+        width = self.width()
+        height = self.height()
+        sw, sh = max(4, width // 2), max(4, height // 2)
+
+        if not hasattr(self, '_lw_flow') or self._lw_flow.shape != (sh, sw):
+            self._lw_flow = np.zeros((sh, sw), dtype=np.float32)
+            self._lw_foam = np.zeros(sw, dtype=np.float32)
+            self._lw_phase = 0.0
+        self._lw_phase += 0.06
+
+        spec = np.interp(np.linspace(0, len(self.spectrum) - 1, sw),
+                         np.arange(len(self.spectrum)), self.spectrum)
+        spec = np.clip(spec / max(self.spectrum_max_height, 1e-6), 0, 1).astype(np.float32)
+
+        # Advect the sheet downward with a per-row horizontal sway (flow distortion)
+        flow = np.roll(self._lw_flow, 3, axis=0)
+        flow[:3, :] = 0
+        sway = (np.sin(np.linspace(0, 4 * np.pi, sh) + self._lw_phase) * 1.5).astype(np.intp)
+        cols = (np.arange(sw)[None, :] + sway[:, None]) % sw
+        flow = flow[np.arange(sh)[:, None], cols] * 0.985
+
+        # Inject new water at the top, shimmering with the spectrum
+        inject = spec * (0.75 + 0.25 * np.sin(np.arange(sw) * 0.35 + self._lw_phase * 3.0,
+                                              dtype=np.float32))
+        flow[0:3, :] = np.maximum(flow[0:3, :], inject[None, :])
+
+        # Horizontal diffusion keeps the sheets cohesive instead of stringy
+        flow = flow * 0.6 + np.roll(flow, 1, axis=1) * 0.2 + np.roll(flow, -1, axis=1) * 0.2
+        self._lw_flow = flow
+
+        # Water arriving at the bottom feeds a churning foam pool
+        arriving = flow[-4:, :].mean(axis=0)
+        self._lw_foam = np.clip(self._lw_foam * 0.9 + arriving * 0.5, 0, 1.2)
+
+        # Colormap: dark background -> deep blue -> cyan sheets
+        v = np.clip(flow, 0, 1)
+        r = v * 60
+        g = 8 + v * 170
+        b = 20 + v * 235
+
+        # Sheen: bright highlights along the leading edges of the sheets
+        sheen = np.clip(np.abs(np.diff(v, axis=0, prepend=v[:1, :])) * 6, 0, 1)
+        r = r + sheen * 150
+        g = g + sheen * 170
+        b = b + sheen * 120
+
+        # Foam band at the bottom with mist rising above it
+        foam_h = max(3, sh // 10)
+        falloff = np.linspace(0.15, 1.0, foam_h, dtype=np.float32)[:, None]
+        foam_noise = np.random.uniform(0.55, 1.0, (foam_h, sw)).astype(np.float32)
+        foam = np.clip(self._lw_foam[None, :] * falloff * foam_noise, 0, 1)
+        r[-foam_h:, :] += foam * 210
+        g[-foam_h:, :] += foam * 225
+        b[-foam_h:, :] += foam * 235
+
+        mist_h = foam_h * 2
+        mist = np.clip(self._lw_foam[None, :] * np.linspace(0.0, 0.35, mist_h,
+                                                            dtype=np.float32)[:, None], 0, 1)
+        r[-mist_h:, :] += mist * 60
+        g[-mist_h:, :] += mist * 80
+        b[-mist_h:, :] += mist * 90
+
+        img_data = np.clip(np.stack([r, g, b], axis=2), 0, 255).astype(np.uint8)
+        img = QImage(img_data.tobytes(), sw, sh, sw * 3, QImage.Format.Format_RGB888)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.drawImage(QRect(0, 0, width, height), img)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+
+    def draw_raindrops(self, painter):
+        """Raindrops - droplets fall from the top with splash and ripples at the bottom"""
         width = self.width()
         height = self.height()
 
@@ -1356,7 +1359,7 @@ class SpectrumAnalyzerWidget(QWidget):
                         # Calculate frequency for this x position
                         freq_idx = int((drop['x'] / width) * len(self.spectrum))
                         freq_idx = min(freq_idx, len(self.spectrum) - 1)
-                        freq_hz = self.freq_bins[freq_idx] if hasattr(self, 'freq_bins') and freq_idx < len(self.freq_bins) else 0
+                        freq_hz = int((freq_idx / max(len(self.spectrum), 1)) * (self.sample_rate / 2))
 
                         if freq_hz > 20:
                             # Format frequency
@@ -1371,10 +1374,12 @@ class SpectrumAnalyzerWidget(QWidget):
                                 'label': freq_label,
                                 'x': drop['x'],
                                 'y': splash_y - 10,
+                                'start_x': drop['x'],
+                                'start_y': splash_y - 10,
                                 'color': QColor(100, 220, 255),
                                 'opacity': 1.0,
                                 'age': 0,
-                                'mode': 'liquid_waterfall'
+                                'mode': 'raindrops'
                             })
             else:
                 # Still falling
@@ -1431,81 +1436,79 @@ class SpectrumAnalyzerWidget(QWidget):
         width = self.width()
         height = self.height()
 
-        # 10x more bars than spectrum - each spectrum bar gets split into 10
-        num_bars = len(self.spectrum) * 10
+        # One bar per pixel column at most - sub-pixel bars just overdraw
+        num_bars = min(len(self.spectrum) * 10, width)
         bar_width = width / num_bars
 
+        # Interpolated levels with subtle noise, all vectorized
+        levels = np.interp(np.linspace(0, len(self.spectrum) - 1, num_bars),
+                           np.arange(len(self.spectrum)), self.spectrum)
+        noise = np.random.uniform(-0.05, 0.05, num_bars) * levels
+        levels = np.clip(levels + noise, 0, 1)
+        bar_heights = (levels * height * 0.9).astype(np.int32)
+
+        # Cached wet/glass gradient strips per level bucket. Each bar is a
+        # scaled blit of a 1x128 strip - far cheaper than rasterizing a
+        # gradient per bar.
+        if not hasattr(self, '_ww_strips'):
+            from PyQt6.QtGui import QImage, QLinearGradient
+            stops = [
+                [(0, (240, 250, 255, 140)), (0.15, (180, 220, 255, 160)),
+                 (0.5, (100, 180, 255, 200)), (1, (40, 140, 255, 240))],
+                [(0, (220, 240, 255, 120)), (0.2, (140, 200, 255, 150)),
+                 (1, (60, 160, 255, 220))],
+                [(0, (200, 230, 255, 100)), (0.3, (100, 180, 255, 130)),
+                 (1, (50, 140, 240, 200))],
+                [(0, (180, 220, 255, 80)), (1, (40, 120, 220, 180))],
+                [(0, (160, 210, 255, 60)), (1, (30, 100, 200, 160))],
+            ]
+
+            def render_strip(stop_list):
+                strip = QImage(1, 128, QImage.Format.Format_ARGB32_Premultiplied)
+                strip.fill(0)
+                sp = QPainter(strip)
+                grad = QLinearGradient(0, 0, 0, 128)
+                for pos, rgba in stop_list:
+                    grad.setColorAt(pos, QColor(*rgba))
+                sp.fillRect(0, 0, 1, 128, QBrush(grad))
+                sp.end()
+                return strip
+
+            self._ww_strips = [render_strip(s) for s in stops]
+            self._ww_highlight = render_strip([(0, (255, 255, 255, 200)),
+                                               (1, (200, 230, 255, 0))])
+
+        from PyQt6.QtCore import QRect
+        bucket_idx = np.digitize(levels, [0.2, 0.4, 0.6, 0.8])  # 0..4, low to high
+        highlight_min = height * 0.3
+
         for i in range(num_bars):
+            bar_height = int(bar_heights[i])
+            if bar_height <= 0:
+                continue
             x = int(i * bar_width)
-            # Map to spectrum with interpolation
-            spectrum_idx = (i / 10)
-            spectrum_idx_floor = int(spectrum_idx)
-            spectrum_idx_ceil = min(spectrum_idx_floor + 1, len(self.spectrum) - 1)
-            lerp_factor = spectrum_idx - spectrum_idx_floor
+            w = max(1, int(bar_width))
+            painter.drawImage(QRect(x, height - bar_height, w, bar_height),
+                              self._ww_strips[4 - bucket_idx[i]])
 
-            # Interpolate between adjacent spectrum bars
-            if spectrum_idx_floor >= len(self.spectrum):
-                spectrum_idx_floor = len(self.spectrum) - 1
-            if spectrum_idx_ceil >= len(self.spectrum):
-                spectrum_idx_ceil = len(self.spectrum) - 1
-
-            level = self.spectrum[spectrum_idx_floor] * (1 - lerp_factor) + self.spectrum[spectrum_idx_ceil] * lerp_factor
-
-            # Add subtle noise to make lines non-linear (±5% variation)
-            import random
-            noise = random.uniform(-0.05, 0.05) * level
-            level = max(0, min(1, level + noise))
-
-            bar_height = int(level * height * 0.9)
-
-            if bar_height > 0:
-                # Use gradient for the wet/glass effect
-                from PyQt6.QtGui import QLinearGradient
-                gradient = QLinearGradient(0, height - bar_height, 0, height)
-
-                # Wet blue with transparency - more translucent at top, brighter at bottom
-                # Add highlights at top for "wet glass" effect
-                if level > 0.8:
-                    gradient.setColorAt(0, QColor(240, 250, 255, 140))  # Bright highlight (wet reflection)
-                    gradient.setColorAt(0.15, QColor(180, 220, 255, 160))
-                    gradient.setColorAt(0.5, QColor(100, 180, 255, 200))
-                    gradient.setColorAt(1, QColor(40, 140, 255, 240))  # Deep blue at bottom
-                elif level > 0.6:
-                    gradient.setColorAt(0, QColor(220, 240, 255, 120))
-                    gradient.setColorAt(0.2, QColor(140, 200, 255, 150))
-                    gradient.setColorAt(1, QColor(60, 160, 255, 220))
-                elif level > 0.4:
-                    gradient.setColorAt(0, QColor(200, 230, 255, 100))
-                    gradient.setColorAt(0.3, QColor(100, 180, 255, 130))
-                    gradient.setColorAt(1, QColor(50, 140, 240, 200))
-                elif level > 0.2:
-                    gradient.setColorAt(0, QColor(180, 220, 255, 80))
-                    gradient.setColorAt(1, QColor(40, 120, 220, 180))
-                else:
-                    gradient.setColorAt(0, QColor(160, 210, 255, 60))
-                    gradient.setColorAt(1, QColor(30, 100, 200, 160))
-
-                # Draw main bar
-                painter.fillRect(x, height - bar_height, max(1, int(bar_width)), bar_height, QBrush(gradient))
-
-                # Add bright "wet" highlight at the top edge for taller bars
-                if bar_height > height * 0.3:
-                    highlight_height = min(4, int(bar_height * 0.1))
-                    painter.setOpacity(0.6)
-                    highlight_gradient = QLinearGradient(0, height - bar_height, 0, height - bar_height + highlight_height)
-                    highlight_gradient.setColorAt(0, QColor(255, 255, 255, 200))
-                    highlight_gradient.setColorAt(1, QColor(200, 230, 255, 0))
-                    painter.fillRect(x, height - bar_height, max(1, int(bar_width)), highlight_height, QBrush(highlight_gradient))
-                    painter.setOpacity(1.0)
+            # Bright "wet" highlight at the top edge for taller bars
+            if bar_height > highlight_min:
+                highlight_height = min(4, int(bar_height * 0.1))
+                painter.setOpacity(0.6)
+                painter.drawImage(QRect(x, height - bar_height, w, highlight_height),
+                                  self._ww_highlight)
+                painter.setOpacity(1.0)
 
     def draw_plasma(self, painter):
         """Advanced plasma with color bleeding, particles, and smooth blending"""
         width = self.width()
         height = self.height()
 
-        # Initialize or resize plasma buffer for color bleeding effect
-        if not hasattr(self, '_plasma_buffer') or self._plasma_buffer.shape != (height, width, 3):
-            self._plasma_buffer = np.zeros((height, width, 3), dtype=np.float32)
+        # Trail buffer lives at half resolution - it is a soft glow, so the
+        # smooth upscale is invisible and the math is 4x cheaper.
+        psw, psh = max(4, width // 2), max(4, height // 2)
+        if not hasattr(self, '_plasma_buffer') or self._plasma_buffer.shape != (psh, psw, 3):
+            self._plasma_buffer = np.zeros((psh, psw, 3), dtype=np.float32)
         if not hasattr(self, '_plasma_particles'):
             self._plasma_particles = []
 
@@ -1520,47 +1523,54 @@ class SpectrumAnalyzerWidget(QWidget):
         from colorsys import hsv_to_rgb
         base_hue = self.color_shift / 360.0
 
-        # Vectorized plasma rendering - MUCH faster
+        # Vectorized plasma rendering
         intensities = smooth_spectrum
         y_positions = (height - intensities * height * 0.85).astype(int)
         col_heights = (intensities * height * 0.85).astype(int)
 
-        for x in range(0, width, 2):  # Sample every 2 pixels for speed
-            intensity = intensities[x]
-            y_pos = y_positions[x]
-            col_height = col_heights[x]
+        # Vectorized column colors (HSV -> RGB, s=0.95)
+        cols = np.arange(0, width, 2)
+        col_int = intensities[cols].astype(np.float32)
+        hue = (base_hue + (cols / width) * 0.4 + col_int * 0.2) % 1.0
+        val = np.clip(col_int * 2.5, 0, 1).astype(np.float32)
+        h6 = hue * 6.0
+        i6 = h6.astype(np.int32) % 6
+        f = (h6 - np.floor(h6)).astype(np.float32)
+        p = val * 0.05
+        q = val * (1 - 0.95 * f)
+        t = val * (1 - 0.95 * (1 - f))
+        col_r = np.choose(i6, [val, q, p, p, t, val])
+        col_g = np.choose(i6, [t, val, val, q, p, p])
+        col_b = np.choose(i6, [p, p, t, val, val, q])
 
-            if col_height < 2:
-                continue
+        # Update the half-res trail buffer with one broadcasted mask
+        y_start = np.maximum(0, y_positions[cols] - 5) // 2
+        y_end = np.minimum(height, y_positions[cols] + col_heights[cols] + 5) // 2
+        active = col_heights[cols] >= 2
+        ys_half = np.arange(psh)[:, None]
+        bcols = cols // 2
+        mask = active[None, :] & (ys_half >= y_start[None, :]) & (ys_half < y_end[None, :])
+        buf = self._plasma_buffer
+        buf[:, bcols, 0] += mask * (col_r * 255 * 0.3)[None, :]
+        buf[:, bcols, 1] += mask * (col_g * 255 * 0.3)[None, :]
+        buf[:, bcols, 2] += mask * (col_b * 255 * 0.3)[None, :]
+        np.clip(buf, 0, 255, out=buf)
 
-            # Calculate color with spatial variation
-            local_hue = (base_hue + (x / width) * 0.4 + intensity * 0.2) % 1.0
-            r, g, b = hsv_to_rgb(local_hue, 0.95, min(1.0, intensity * 2.5))
-
-            # Draw column with painter (faster than per-pixel)
-            y_start = max(0, y_pos - 5)
-            y_end = min(height, y_pos + col_height + 5)
-
-            if y_end > y_start:
-                # Create gradient for this column
-                color = QColor(int(r * 255), int(g * 255), int(b * 255))
-                painter.setPen(QPen(color, 3))
-                painter.drawLine(x, y_start, x, y_end)
-
-                # Update buffer for next frame blending
-                y_slice = slice(y_start, y_end)
-                self._plasma_buffer[y_slice, x, 0] = np.clip(self._plasma_buffer[y_slice, x, 0] + r * 255 * 0.3, 0, 255)
-                self._plasma_buffer[y_slice, x, 1] = np.clip(self._plasma_buffer[y_slice, x, 1] + g * 255 * 0.3, 0, 255)
-                self._plasma_buffer[y_slice, x, 2] = np.clip(self._plasma_buffer[y_slice, x, 2] + b * 255 * 0.3, 0, 255)
-
-        # Simple color bleeding via array operations (much faster than nested loops)
-        self._plasma_buffer = np.clip(self._plasma_buffer, 0, 255)
-
-        # Draw plasma image
+        # Draw trail image first (upscaled), then the crisp core lines over it
         from PyQt6.QtGui import QImage
-        plasma_img = self._plasma_buffer.astype(np.uint8)
-        plasma_image = QImage(plasma_img.tobytes(), width, height, width * 3, QImage.Format.Format_RGB888)
-        painter.drawImage(0, 0, plasma_image)
+        from PyQt6.QtCore import QRect
+        plasma_img = buf.astype(np.uint8)
+        plasma_image = QImage(plasma_img.tobytes(), psw, psh, psw * 3, QImage.Format.Format_RGB888)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.drawImage(QRect(0, 0, width, height), plasma_image)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+
+        for ci, x in enumerate(cols):
+            if not active[ci]:
+                continue
+            color = QColor(int(col_r[ci] * 255), int(col_g[ci] * 255), int(col_b[ci] * 255))
+            y0 = int(y_start[ci]) * 2
+            painter.fillRect(x - 1, y0, 3, int(y_end[ci]) * 2 - y0, color)
 
         # Generate energy particles from peaks
         painter.setPen(Qt.PenStyle.NoPen)
@@ -1619,137 +1629,121 @@ class SpectrumAnalyzerWidget(QWidget):
         width = self.width()
         height = self.height()
 
-        # Draw dark VFD background (like actual vacuum tube displays)
-        painter.fillRect(0, 0, width, height, QBrush(QColor(5, 10, 12)))
+        # Vectorized: build the phosphor field in numpy at half width (bars are
+        # chunky anyway), full height (keeps segments crisp), one drawImage.
+        from PyQt6.QtGui import QImage
+        from PyQt6.QtCore import QRect
 
-        # Smooth spectrum for VFD display
-        smooth_spectrum = np.interp(np.linspace(0, len(self.spectrum) - 1, width),
-                                    np.arange(len(self.spectrum)), self.spectrum)
+        sw = min(width, max(4, width // 2))
 
-        # 80s VFD cyan phosphor colors
-        phosphor_bright = QColor(0, 255, 255)    # Bright cyan
-        phosphor_med = QColor(0, 200, 220)        # Medium cyan
-        phosphor_dim = QColor(0, 140, 160)        # Dim cyan
-        phosphor_glow = QColor(0, 180, 200, 120)  # Glow
+        # Per-display-column level (nearest-neighbor keeps the blocky bar look)
+        col_idx = np.minimum(np.arange(sw) * len(self.spectrum) // sw,
+                             len(self.spectrum) - 1)
+        levels = self.spectrum[col_idx].astype(np.float32)
+        bar_heights = (levels * height * 0.88).astype(np.int32)
 
-        # Draw VFD bars with authentic segmented look
-        num_bars = len(self.spectrum) * 2  # Higher resolution
-        bar_width = width / num_bars
+        ys = np.arange(height, dtype=np.int32)[:, None]
+        y_off = height - 1 - ys  # distance from bottom
+        lit = (ys >= (height - bar_heights)[None, :]) & (bar_heights[None, :] > 5)
 
-        for i in range(num_bars):
-            x = int(i * bar_width)
-            idx = int(i / 2)
-            if idx >= len(self.spectrum):
-                idx = len(self.spectrum) - 1
-            level = self.spectrum[idx]
-            bar_height = int(level * height * 0.88)
+        # Segmented look: 3px segment + 2px gap, brightness dimmer per segment upward
+        seg_rows = (y_off % 5) < 3
+        brightness = np.clip(np.float32(1.0) - (y_off // 5) * np.float32(0.03),
+                             0, 1).astype(np.float32)
 
-            if bar_height > 5:
-                # VFD segments (horizontal lines with gaps)
-                segment_height = 3
-                gap = 2
-                num_segments = bar_height // (segment_height + gap)
+        # Cyan phosphor color per column by level
+        conds = [levels > 0.7, levels > 0.4]
+        main_g = np.select(conds, [255, 200], 140).astype(np.float32)
+        main_b = np.select(conds, [255, 220], 160).astype(np.float32)
 
-                for seg in range(num_segments):
-                    seg_y = height - (seg * (segment_height + gap)) - segment_height
+        # Bloom/glow: lit segments dilated by 1px, cyan at reduced alpha
+        seg_mask = lit & seg_rows
+        glow_mask = seg_mask | np.roll(seg_mask, 1, axis=1) | np.roll(seg_mask, -1, axis=1)
+        glow_mask |= np.roll(glow_mask, 1, axis=0) | np.roll(glow_mask, -1, axis=0)
+        glow_alpha = np.float32(0.6 * (120.0 / 255.0))
 
-                    # Segment brightness varies (phosphor effect)
-                    brightness_var = 1.0 - (seg * 0.03)  # Dimmer at top
+        glow_b_layer = glow_mask * brightness  # shared spatial glow field
+        img = np.empty((height, sw, 3), dtype=np.float32)
+        img[:, :, 0] = 5.0
+        img[:, :, 1] = 10 + glow_b_layer * (np.float32(180) * glow_alpha)
+        img[:, :, 2] = 12 + glow_b_layer * (np.float32(200) * glow_alpha)
 
-                    # Draw bloom/glow first (background)
-                    painter.setOpacity(0.6 * brightness_var)
-                    painter.fillRect(x - 1, seg_y - 1, int(bar_width) + 2, segment_height + 2,
-                                   QBrush(phosphor_glow))
+        img[:, :, 1] = np.where(seg_mask, main_g[None, :] * brightness, img[:, :, 1])
+        img[:, :, 2] = np.where(seg_mask, main_b[None, :] * brightness, img[:, :, 2])
 
-                    # Draw main segment
-                    painter.setOpacity(brightness_var)
-                    if level > 0.7:
-                        painter.fillRect(x, seg_y, max(1, int(bar_width)), segment_height,
-                                       QBrush(phosphor_bright))
-                    elif level > 0.4:
-                        painter.fillRect(x, seg_y, max(1, int(bar_width)), segment_height,
-                                       QBrush(phosphor_med))
-                    else:
-                        painter.fillRect(x, seg_y, max(1, int(bar_width)), segment_height,
-                                       QBrush(phosphor_dim))
+        # Subtle scan line effect (CRT-like)
+        img[::2, :, :] *= np.float32(0.92)
 
-        painter.setOpacity(1.0)
-
-        # Add subtle scan line effect (CRT-like)
-        painter.setOpacity(0.08)
-        for y in range(0, height, 2):
-            painter.fillRect(0, y, width, 1, QBrush(QColor(0, 0, 0)))
-        painter.setOpacity(1.0)
+        img_data = np.clip(img, 0, 255).astype(np.uint8)
+        qimg = QImage(img_data.tobytes(), sw, height, sw * 3, QImage.Format.Format_RGB888)
+        painter.drawImage(QRect(0, 0, width, height), qimg)
 
     def draw_vfd_90s(self, painter):
         """90s VFD - Authentic green/amber phosphor with high detail"""
         width = self.width()
         height = self.height()
 
-        # Dark greenish background (90s VFD characteristic)
-        painter.fillRect(0, 0, width, height, QBrush(QColor(2, 8, 2)))
+        # Vectorized: build the phosphor field in numpy at half width (bars are
+        # chunky anyway), full height (keeps scan lines crisp), one drawImage.
+        from PyQt6.QtGui import QImage
+        from PyQt6.QtCore import QRect
 
-        # Higher resolution for 90s displays
-        num_bars = len(self.spectrum) * 3
-        bar_width = width / num_bars
+        sw = min(width, max(4, width // 2))
 
-        for i in range(num_bars):
-            x = int(i * bar_width)
-            idx = min(int(i / 3), len(self.spectrum) - 1)
-            level = self.spectrum[idx]
-            bar_height = int(level * height * 0.9)
+        # Per-display-column level (nearest-neighbor keeps the blocky bar look)
+        col_idx = np.minimum(np.arange(sw) * len(self.spectrum) // sw,
+                             len(self.spectrum) - 1)
+        levels = self.spectrum[col_idx].astype(np.float32)
+        bar_heights = (levels * height * 0.9).astype(np.int32)
 
-            if bar_height > 3:
-                # 90s VFD multi-color phosphor (green base, amber peaks)
-                if level > 0.75:
-                    # Hot amber for peaks
-                    main_color = QColor(255, 180, 0)
-                    glow_color = QColor(255, 140, 0, 100)
-                elif level > 0.5:
-                    # Yellow-green transition
-                    main_color = QColor(180, 255, 20)
-                    glow_color = QColor(140, 200, 20, 100)
-                elif level > 0.25:
-                    # Bright green
-                    main_color = QColor(50, 255, 80)
-                    glow_color = QColor(30, 200, 60, 100)
-                else:
-                    # Dim green
-                    main_color = QColor(20, 180, 60)
-                    glow_color = QColor(15, 130, 45, 100)
+        ys = np.arange(height, dtype=np.int32)[:, None]
+        lit = (ys >= (height - bar_heights)[None, :]) & (bar_heights[None, :] > 3)
 
-                # Draw glow layer
-                painter.setOpacity(0.7)
-                painter.fillRect(x - 1, height - bar_height - 2, int(bar_width) + 2, bar_height + 2,
-                               QBrush(glow_color))
+        # 90s VFD multi-color phosphor (green base, amber peaks), per column
+        conds = [levels > 0.75, levels > 0.5, levels > 0.25]
+        main_rgb = np.stack([
+            np.select(conds, [255, 180, 50], 20),
+            np.select(conds, [180, 255, 255], 180),
+            np.select(conds, [0, 20, 80], 60),
+        ], axis=1).astype(np.float32)  # (sw, 3)
+        glow_rgb = np.stack([
+            np.select(conds, [255, 140, 30], 15),
+            np.select(conds, [140, 200, 200], 130),
+            np.select(conds, [0, 20, 60], 45),
+        ], axis=1).astype(np.float32)
 
-                # Draw main bar with dot-matrix style (fine horizontal lines)
-                painter.setOpacity(1.0)
-                line_height = 2
-                gap = 1
-                for y_off in range(0, bar_height, line_height + gap):
-                    y_pos = height - y_off - line_height
-                    # Brightness fades slightly toward top
-                    fade = 1.0 - (y_off / bar_height) * 0.15
-                    painter.setOpacity(fade)
-                    painter.fillRect(x, y_pos, max(1, int(bar_width)), line_height,
-                                   QBrush(main_color))
+        # Brightness fades slightly toward the top of each bar
+        y_off = (height - 1 - ys).astype(np.float32)
+        fade = np.float32(1.0) - (y_off / np.maximum(bar_heights[None, :], 1)) * np.float32(0.15)
 
-                # Add extra brightness at peaks (phosphor over-saturation)
-                if level > 0.6:
-                    painter.setOpacity(0.5)
-                    peak_glow = QColor(255, 255, 200, 150)
-                    peak_height = int(bar_height * 0.2)
-                    painter.fillRect(x - 1, height - bar_height, int(bar_width) + 2, peak_height,
-                                   QBrush(peak_glow))
+        # Glow layer: lit area dilated by 1px left/right and 2px up, at 70% x alpha
+        glow_lit = lit | np.roll(lit, 1, axis=1) | np.roll(lit, -1, axis=1)
+        glow_lit |= np.roll(glow_lit, -2, axis=0)
+        glow_scale = np.float32(0.7 * (100.0 / 255.0))
 
-        painter.setOpacity(1.0)
+        base = np.array([2, 8, 2], dtype=np.float32)
+        img = np.where(glow_lit[:, :, None],
+                       base + glow_rgb[None, :, :] * glow_scale,
+                       base[None, None, :])
 
-        # Add subtle horizontal scan lines (CRT effect)
-        painter.setOpacity(0.06)
-        for y in range(0, height, 3):
-            painter.fillRect(0, y, width, 1, QBrush(QColor(0, 0, 0)))
-        painter.setOpacity(1.0)
+        # Main bar with dot-matrix rows (2px lit, 1px gap)
+        bar_mask = lit & ((((height - 1 - ys) % 3) < 2))
+        img = np.where(bar_mask[:, :, None],
+                       main_rgb[None, :, :] * fade[:, :, None], img)
+
+        # Phosphor over-saturation at the top 20% of hot bars
+        peak_mask = lit & (levels[None, :] > 0.6) & \
+            (ys < (height - bar_heights + np.maximum(bar_heights // 5, 1))[None, :])
+        peak_color = np.array([255, 255, 200], dtype=np.float32) * np.float32(0.3)
+        img = np.where(peak_mask[:, :, None],
+                       img * np.float32(0.5) + peak_color[None, None, :], img)
+
+        # Subtle horizontal scan lines (CRT effect)
+        img[::3, :, :] *= np.float32(0.94)
+
+        img_data = np.clip(img, 0, 255).astype(np.uint8)
+        qimg = QImage(img_data.tobytes(), sw, height, sw * 3, QImage.Format.Format_RGB888)
+        painter.drawImage(QRect(0, 0, width, height), qimg)
 
     def mouseMoveEvent(self, event):
         """Track mouse position for tooltip"""
@@ -1812,38 +1806,47 @@ class SpectrumAnalyzerWidget(QWidget):
 
         painter.setPen(Qt.PenStyle.NoPen)
         from colorsys import hsv_to_rgb
+        from PyQt6.QtGui import QImage
+        from PyQt6.QtCore import QRect
 
+        # Precompute per-bar geometry and color once
+        bars = []
         for i in range(num_bars):
-            x = int(i * bar_width)
             intensity = smooth_spectrum[i] / self.spectrum_max_height
-
             if intensity > 0.02:
-                bar_height = int(intensity * height * 0.9)
+                r, g, b = hsv_to_rgb((i / num_bars) * 0.7, 1.0, 1.0)
+                bars.append((int(i * bar_width), int(intensity * height * 0.9),
+                             QColor(int(r * 255), int(g * 255), int(b * 255))))
 
-                # Neon color based on frequency
-                hue = (i / num_bars) * 0.7  # Rainbow across spectrum
-                r, g, b = hsv_to_rgb(hue, 1.0, 1.0)
+        tube_off = int(bar_width * 0.3)
+        tube_width = max(2, int(bar_width * 0.4))
 
-                # Core bright tube
-                core_color = QColor(int(r * 255), int(g * 255), int(b * 255))
-                painter.setBrush(QBrush(core_color))
-                tube_width = max(2, int(bar_width * 0.4))
-                painter.drawRoundedRect(x + int(bar_width * 0.3), height - bar_height,
-                                       tube_width, bar_height, 2, 2)
+        # Glow layers rendered at half resolution: the smooth upscale doubles
+        # as a blur, which is exactly what a neon glow wants.
+        glow_img = QImage(max(2, width // 2), max(2, height // 2),
+                          QImage.Format.Format_ARGB32_Premultiplied)
+        glow_img.fill(0)
+        gp = QPainter(glow_img)
+        gp.setPen(Qt.PenStyle.NoPen)
+        # Plain rects on the fast fill path - the upscale blur rounds them off
+        for glow_layer in range(3):
+            glow_size = (glow_layer + 1) * 4
+            gp.setOpacity(0.3 / (glow_layer + 1))
+            for x, bar_height, color in bars:
+                gp.fillRect((x + tube_off - glow_size) // 2,
+                            (height - bar_height - glow_size) // 2,
+                            (tube_width + glow_size * 2) // 2,
+                            (bar_height + glow_size * 2) // 2, color)
+        gp.end()
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.drawImage(QRect(0, 0, width, height), glow_img)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
 
-                # Outer glow layers
-                for glow_layer in range(3):
-                    glow_size = (glow_layer + 1) * 4
-                    opacity = 0.3 / (glow_layer + 1)
-                    painter.setOpacity(opacity)
-                    glow_color = QColor(int(r * 255), int(g * 255), int(b * 255), int(opacity * 255))
-                    painter.setBrush(QBrush(glow_color))
-                    painter.drawRoundedRect(x + int(bar_width * 0.3) - glow_size,
-                                           height - bar_height - glow_size,
-                                           tube_width + glow_size * 2,
-                                           bar_height + glow_size * 2, 4, 4)
-
-                painter.setOpacity(1.0)
+        # Core bright tubes at full resolution
+        for x, bar_height, color in bars:
+            painter.setBrush(QBrush(color))
+            painter.drawRoundedRect(x + tube_off, height - bar_height,
+                                    tube_width, bar_height, 2, 2)
 
     def draw_aurora(self, painter):
         """Aurora borealis effect with flowing ribbons"""
@@ -1854,40 +1857,52 @@ class SpectrumAnalyzerWidget(QWidget):
             self._aurora_phase = 0
         self._aurora_phase = (self._aurora_phase + 0.03) % (2 * np.pi)
 
-        # Create gradient bands
-        smooth_spectrum = np.interp(np.linspace(0, len(self.spectrum) - 1, width),
-                                    np.arange(len(self.spectrum)), self.spectrum)
-
-        from colorsys import hsv_to_rgb
+        # Simulate at half resolution and upscale - the ribbons are soft glows,
+        # so the smooth upscale is visually lossless and 4x cheaper.
         from PyQt6.QtGui import QImage
+        from PyQt6.QtCore import QRect
 
-        img_data = np.zeros((height, width, 3), dtype=np.uint8)
+        sw, sh = max(4, width // 2), max(4, height // 2)
+        smooth_spectrum = np.interp(np.linspace(0, len(self.spectrum) - 1, sw),
+                                    np.arange(len(self.spectrum)), self.spectrum)
+        intensity = (smooth_spectrum / self.spectrum_max_height).astype(np.float32)
 
-        for x in range(width):
-            intensity = smooth_spectrum[x] / self.spectrum_max_height
+        xs = np.arange(sw, dtype=np.float32)
+        ys = np.arange(sh, dtype=np.float32)[:, None]  # column vector for broadcasting
 
-            # Multiple wave layers for aurora effect
-            for wave_idx in range(3):
-                wave_offset = wave_idx * np.pi / 3
-                wave_y = height * 0.5 + np.sin(x / 40 + self._aurora_phase + wave_offset) * height * 0.2 * intensity
-                wave_height = int(height * 0.15 * (1.0 + intensity))
+        accum = np.zeros((sh, sw, 3), dtype=np.float32)
+        hsv_value = np.clip(intensity * 1.5, 0, 1)
 
-                # Aurora colors: green, blue, purple
-                hue = 0.3 + wave_idx * 0.15 + intensity * 0.1
-                r, g, b = hsv_to_rgb(hue, 0.8, intensity * 1.5)
+        for wave_idx in range(3):
+            wave_offset = wave_idx * np.pi / 3
+            wave_y = sh * 0.5 + np.sin(xs / 20 + self._aurora_phase + wave_offset) * sh * 0.2 * intensity
+            wave_height = np.maximum(sh * 0.15 * (1.0 + intensity), 1e-3)
 
-                for y in range(height):
-                    dist_from_wave = abs(y - wave_y)
-                    if dist_from_wave < wave_height:
-                        alpha = 1.0 - (dist_from_wave / wave_height)
-                        alpha = alpha ** 2 * intensity
-                        # Use numpy clip to prevent overflow
-                        img_data[y, x, 0] = np.clip(img_data[y, x, 0] + int(r * 255 * alpha), 0, 255).astype(np.uint8)
-                        img_data[y, x, 1] = np.clip(img_data[y, x, 1] + int(g * 255 * alpha), 0, 255).astype(np.uint8)
-                        img_data[y, x, 2] = np.clip(img_data[y, x, 2] + int(b * 255 * alpha), 0, 255).astype(np.uint8)
+            # Vectorized alpha falloff around each wave centerline
+            dist = np.abs(ys - wave_y[None, :])
+            alpha = np.clip(1.0 - dist / wave_height[None, :], 0, 1) ** 2 * intensity[None, :]
 
-        img = QImage(img_data.tobytes(), width, height, width * 3, QImage.Format.Format_RGB888)
-        painter.drawImage(0, 0, img)
+            # Aurora colors (green/blue/purple), vectorized HSV -> RGB
+            hue = (0.3 + wave_idx * 0.15 + intensity * 0.1) % 1.0
+            h6 = hue * 6.0
+            i6 = h6.astype(np.int32) % 6
+            f = h6 - np.floor(h6)
+            p = hsv_value * 0.2                      # v * (1 - s), s = 0.8
+            q = hsv_value * (1 - 0.8 * f)
+            t = hsv_value * (1 - 0.8 * (1 - f))
+            r = np.choose(i6, [hsv_value, q, p, p, t, hsv_value])
+            g = np.choose(i6, [t, hsv_value, hsv_value, q, p, p])
+            b = np.choose(i6, [p, p, t, hsv_value, hsv_value, q])
+
+            accum[:, :, 0] += r[None, :] * 255 * alpha
+            accum[:, :, 1] += g[None, :] * 255 * alpha
+            accum[:, :, 2] += b[None, :] * 255 * alpha
+
+        img_data = np.clip(accum, 0, 255).astype(np.uint8)
+        img = QImage(img_data.tobytes(), sw, sh, sw * 3, QImage.Format.Format_RGB888)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.drawImage(QRect(0, 0, width, height), img)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
 
     def draw_lava_lamp(self, painter):
         """Lava lamp with floating blobs"""
@@ -1964,7 +1979,11 @@ class SpectrumAnalyzerWidget(QWidget):
                     'chars': []
                 })
 
-        painter.setPen(Qt.PenStyle.NoPen)
+        # Set the font once - re-setting it per character forces a relayout
+        font = painter.font()
+        font.setFamily("Monospace")
+        font.setPixelSize(14)
+        painter.setFont(font)
 
         # Update drops based on spectrum
         smooth_spectrum = np.interp(np.linspace(0, len(self.spectrum) - 1, len(self._matrix_drops)),
@@ -1994,10 +2013,6 @@ class SpectrumAnalyzerWidget(QWidget):
                     color = QColor(0, brightness, 0)
 
                 painter.setPen(color)
-                font = painter.font()
-                font.setFamily("Monospace")
-                font.setPixelSize(14)
-                painter.setFont(font)
                 painter.drawText(int(drop['x']), int(char['y']), chr(33 + (char_idx * 7) % 94))
 
                 # Fade trail
@@ -2057,13 +2072,17 @@ class SpectrumAnalyzerWidget(QWidget):
 
         history_len = len(self._seismo_history)
         if history_len > 1:
-            # Draw the trace from right side (most recent) to left (older)
-            for i in range(max(0, history_len - width), history_len - 1):
+            # Single polyline call instead of one drawLine per pixel column
+            from PyQt6.QtGui import QPolygon
+            from PyQt6.QtCore import QPoint
+            points = []
+            for i in range(max(0, history_len - width), history_len):
                 x_pos = width - (history_len - i)
-                if x_pos >= 0 and x_pos < width - 1:
-                    y1 = int(height / 2 + (self._seismo_history[i] - 0.5) * height * 0.7)
-                    y2 = int(height / 2 + (self._seismo_history[i + 1] - 0.5) * height * 0.7)
-                    painter.drawLine(x_pos, y1, x_pos + 1, y2)
+                if 0 <= x_pos < width:
+                    y = int(height / 2 + (self._seismo_history[i] - 0.5) * height * 0.7)
+                    points.append(QPoint(x_pos, y))
+            if len(points) > 1:
+                painter.drawPolyline(QPolygon(points))
 
         # Draw needle at right edge where new data appears
         needle_x = width - 5
@@ -2104,17 +2123,16 @@ class SpectrumAnalyzerWidget(QWidget):
                 size = 8 + intensity * 20
 
                 hue = (i / len(smooth_spectrum)) % 1.0
-                r, g, b = hsv_to_rgb(hue, 0.9, intensity * 1.5)
+                r, g, b = hsv_to_rgb(hue, 0.9, min(1.0, intensity * 1.5))
                 color = QColor(int(r * 255), int(g * 255), int(b * 255))
 
-                # Draw in each kaleidoscope segment
+                # Brush and opacity are identical for all segments - set once
+                painter.setOpacity(0.7)
+                painter.setBrush(QBrush(color))
                 for seg in range(segments):
                     angle = (seg / segments) * 2 * np.pi + self.color_shift / 100
                     x = center_x + np.cos(angle) * radius
                     y = center_y + np.sin(angle) * radius
-
-                    painter.setOpacity(0.7)
-                    painter.setBrush(QBrush(color))
                     painter.drawEllipse(int(x - size), int(y - size), int(size * 2), int(size * 2))
 
         painter.setOpacity(1.0)
@@ -2128,32 +2146,41 @@ class SpectrumAnalyzerWidget(QWidget):
                                     np.arange(len(self.spectrum)), self.spectrum)
 
         from colorsys import hsv_to_rgb
+        from PyQt6.QtGui import QImage
+        from PyQt6.QtCore import QRect
 
-        # Draw using painter ellipses (much faster than per-pixel)
-        painter.setPen(Qt.PenStyle.NoPen)
+        # Gas clouds rendered at half resolution - the smooth upscale is a
+        # free blur, which suits glowing nebula clouds perfectly.
+        cloud_img = QImage(max(2, width // 2), max(2, height // 2),
+                           QImage.Format.Format_ARGB32_Premultiplied)
+        cloud_img.fill(0)
+        cp = QPainter(cloud_img)
+        cp.setPen(Qt.PenStyle.NoPen)
 
         for i, level in enumerate(smooth_spectrum):
             intensity = level / self.spectrum_max_height
             if intensity > 0.15:
-                x_center = (i / len(smooth_spectrum)) * width
-                y_center = height * (0.5 - intensity * 0.3)
-                cloud_size = 30 + intensity * 60
+                x_center = (i / len(smooth_spectrum)) * width / 2
+                y_center = height * (0.5 - intensity * 0.3) / 2
+                cloud_size = (30 + intensity * 60) / 2
 
                 # Nebula colors: deep space purple, blue, pink
                 hue = 0.7 + (i / len(smooth_spectrum)) * 0.3
                 r, g, b = hsv_to_rgb(hue, 0.7, intensity * 0.8)
+                color = QColor(int(r * 255), int(g * 255), int(b * 255))
+                cp.setBrush(QBrush(color))
 
                 # Draw glow layers
                 for layer in range(3):
                     size = cloud_size * (1 + layer * 0.5)
-                    opacity = (0.2 / (layer + 1)) * intensity
-                    painter.setOpacity(opacity)
-                    color = QColor(int(r * 255), int(g * 255), int(b * 255))
-                    painter.setBrush(QBrush(color))
-                    painter.drawEllipse(int(x_center - size), int(y_center - size),
-                                       int(size * 2), int(size * 2))
+                    cp.setOpacity((0.2 / (layer + 1)) * intensity)
+                    cp.drawEllipse(int(x_center - size), int(y_center - size),
+                                   int(size * 2), int(size * 2))
+        cp.end()
 
-        painter.setOpacity(1.0)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.drawImage(QRect(0, 0, width, height), cloud_img)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
 
         # Draw static stars
         if not hasattr(self, '_nebula_stars'):
@@ -2221,8 +2248,11 @@ class SpectrumAnalyzerWidget(QWidget):
         width = self.width()
         height = self.height()
 
-        if not hasattr(self, '_metal_buffer') or self._metal_buffer.shape != (height, width):
-            self._metal_buffer = np.zeros((height, width), dtype=np.float32)
+        # Half-res simulation: mercury is soft and reflective, the upscale is
+        # invisible and the fluid math is 4x cheaper.
+        sw, sh = max(4, width // 2), max(4, height // 2)
+        if not hasattr(self, '_metal_buffer') or self._metal_buffer.shape != (sh, sw):
+            self._metal_buffer = np.zeros((sh, sw), dtype=np.float32)
 
         # Enhanced fluid simulation with lateral spread
         # Gravity flow downward
@@ -2236,20 +2266,19 @@ class SpectrumAnalyzerWidget(QWidget):
         # Decay
         self._metal_buffer *= 0.88
 
-        # Add new "drops" from spectrum
-        smooth_spectrum = np.interp(np.linspace(0, len(self.spectrum) - 1, width),
+        # Add new "drops" from spectrum - fully vectorized
+        smooth_spectrum = np.interp(np.linspace(0, len(self.spectrum) - 1, sw),
                                     np.arange(len(self.spectrum)), self.spectrum)
-
-        # Vectorized drop addition
-        for x in range(0, width, 2):
-            intensity = smooth_spectrum[x] / self.spectrum_max_height
-            if intensity > 0.1:
-                drop_height = int(intensity * 25)
-                if drop_height > 0 and drop_height < height:
-                    self._metal_buffer[:drop_height, x] = np.maximum(
-                        self._metal_buffer[:drop_height, x],
-                        np.linspace(intensity, intensity * 0.3, drop_height)
-                    )
+        intensity = (smooth_spectrum / self.spectrum_max_height).astype(np.float32)
+        drop_heights = (intensity * 13).astype(np.int32)  # 25px at full res
+        max_dh = 14
+        ys_top = np.arange(max_dh, dtype=np.float32)[:, None]
+        with np.errstate(divide='ignore', invalid='ignore'):
+            frac = np.clip(ys_top / np.maximum(drop_heights[None, :] - 1, 1), 0, 1)
+        profile = intensity[None, :] * (1.0 - 0.7 * frac)
+        profile *= (ys_top < drop_heights[None, :]) & (intensity[None, :] > 0.1)
+        top = min(max_dh, sh)
+        self._metal_buffer[:top, :] = np.maximum(self._metal_buffer[:top, :], profile[:top, :])
 
         # Render with realistic metallic sheen
         from PyQt6.QtGui import QImage
@@ -2269,8 +2298,11 @@ class SpectrumAnalyzerWidget(QWidget):
         # Stack RGB channels
         img_data = np.stack([red, green, blue], axis=2)
 
-        img = QImage(img_data.tobytes(), width, height, width * 3, QImage.Format.Format_RGB888)
-        painter.drawImage(0, 0, img)
+        from PyQt6.QtCore import QRect
+        img = QImage(img_data.tobytes(), sw, sh, sw * 3, QImage.Format.Format_RGB888)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.drawImage(QRect(0, 0, width, height), img)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
 
     def draw_rainbow_bars(self, painter):
         """Classic bars with smooth rainbow gradient"""
@@ -2284,26 +2316,28 @@ class SpectrumAnalyzerWidget(QWidget):
                                     np.arange(len(self.spectrum)), self.spectrum)
 
         from colorsys import hsv_to_rgb
-        from PyQt6.QtGui import QLinearGradient
 
-        for i in range(num_bars):
-            x = int(i * bar_width)
-            level = smooth_spectrum[i] / self.spectrum_max_height
-
-            if level > 0.01:
-                bar_height = int(level * height)
-
-                # Rainbow hue based on position
-                hue = (i / num_bars) % 1.0
-                r, g, b = hsv_to_rgb(hue, 0.9, 1.0)
-
-                # Vertical gradient from saturated to bright
-                gradient = QLinearGradient(0, height - bar_height, 0, height)
+        # Cache one ObjectMode gradient brush per bar - hue only depends on
+        # the bar index, so these survive across frames until num_bars changes
+        if getattr(self, '_rb_num_bars', None) != num_bars:
+            from PyQt6.QtGui import QLinearGradient, QGradient
+            self._rb_num_bars = num_bars
+            self._rb_brushes = []
+            for i in range(num_bars):
+                r, g, b = hsv_to_rgb((i / num_bars) % 1.0, 0.9, 1.0)
+                gradient = QLinearGradient(0, 0, 0, 1)
+                gradient.setCoordinateMode(QGradient.CoordinateMode.ObjectMode)
                 gradient.setColorAt(0, QColor(int(r * 255), int(g * 255), int(b * 255)))
                 gradient.setColorAt(1, QColor(int(r * 255 * 0.6), int(g * 255 * 0.6), int(b * 255 * 0.6)))
+                self._rb_brushes.append(QBrush(gradient))
 
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(QBrush(gradient))
+        painter.setPen(Qt.PenStyle.NoPen)
+        for i in range(num_bars):
+            level = smooth_spectrum[i] / self.spectrum_max_height
+            if level > 0.01:
+                x = int(i * bar_width)
+                bar_height = int(level * height)
+                painter.setBrush(self._rb_brushes[i])
                 painter.drawRect(x, height - bar_height, max(1, int(bar_width)), bar_height)
 
     def draw_peak_labels(self, painter):
@@ -2553,7 +2587,7 @@ class BufferVisualizerWidget(QWidget):
         self.quantum = 1024
         self.min_quantum = 256
         self.max_quantum = 2048
-        self.sample_rate = 48000
+        self.sample_rate = 192000
         self.buffer_fill = 0.0  # 0.0 to 1.0
         self.setStyleSheet("background-color: #1a1a1a; border: 1px solid #00ff88; border-radius: 4px;")
 
@@ -2607,379 +2641,6 @@ class BufferVisualizerWidget(QWidget):
         painter.setFont(QFont("Arial", 8))
         painter.setPen(QColor(150, 150, 150))
         painter.drawText(width - 50, 15, f"Q:{self.quantum}")
-
-
-class ProjectMWidget(QWidget):
-    """ProjectM visualization widget - Winamp-style milkdrop visualizations"""
-
-    def __init__(self):
-        super().__init__()
-        self.projectm_available = PROJECTM_AVAILABLE and OPENGL_AVAILABLE
-        self.audio_buffer = np.zeros(512, dtype=np.float32)
-        self.current_preset_index = 0
-        self.presets = []
-        self.auto_switch = True
-        self.preset_duration = 15  # seconds
-        self.time_on_preset = 0
-
-        if not self.projectm_available:
-            self.init_fallback_ui()
-            return
-
-        # Load presets
-        self.load_presets()
-
-        # Initialize UI
-        self.init_ui()
-
-        # No timers needed since ProjectM runs in separate window
-
-    def init_fallback_ui(self):
-        """Show message when ProjectM is not available"""
-        layout = QVBoxLayout(self)
-        label = QLabel("ProjectM visualization not available\n\nRequires: libprojectM and PyOpenGL")
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setStyleSheet("QLabel { font-size: 14pt; color: #888; }")
-        layout.addWidget(label)
-
-    def load_presets(self):
-        """Load all available projectM/Milkdrop presets"""
-        preset_dir = "/usr/share/projectM/presets"
-        if os.path.exists(preset_dir):
-            self.presets = sorted(glob.glob(os.path.join(preset_dir, "*.milk")))
-
-        if not self.presets:
-            self.projectm_available = False
-            self.init_fallback_ui()
-
-    def init_ui(self):
-        """Initialize the UI with native OpenGL ProjectM widget"""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        # Create native OpenGL ProjectM widget - the Winamp way!
-        self.gl_widget = ProjectMGLWidget(self)
-        self.gl_widget.setMinimumHeight(200)
-        layout.addWidget(self.gl_widget)
-
-        # Preset controls
-        controls_layout = QHBoxLayout()
-        controls_layout.setContentsMargins(10, 5, 10, 5)
-
-        # Previous preset button
-        prev_btn = QPushButton("◀ Prev")
-        prev_btn.clicked.connect(self.previous_preset)
-        prev_btn.setStyleSheet("""
-            QPushButton {
-                font-size: 12px;
-                padding: 4px 12px;
-                background-color: #00d4ff;
-                color: #000000;
-                border: none;
-                border-radius: 4px;
-            }
-            QPushButton:hover { background-color: #00a8cc; }
-        """)
-        controls_layout.addWidget(prev_btn)
-
-        # Next preset button
-        next_btn = QPushButton("Next ▶")
-        next_btn.clicked.connect(self.next_preset)
-        next_btn.setStyleSheet("""
-            QPushButton {
-                font-size: 12px;
-                padding: 4px 12px;
-                background-color: #00d4ff;
-                color: #000000;
-                border: none;
-                border-radius: 4px;
-            }
-            QPushButton:hover { background-color: #00a8cc; }
-        """)
-        controls_layout.addWidget(next_btn)
-
-        controls_layout.addStretch()
-        layout.addLayout(controls_layout)
-
-    def change_preset(self, index):
-        """Change to selected preset"""
-        self.current_preset_index = index
-        self.time_on_preset = 0
-        if hasattr(self, 'gl_widget') and hasattr(self.gl_widget, 'load_preset'):
-            if index < len(self.presets):
-                self.gl_widget.load_preset(self.presets[index])
-
-    def next_preset(self):
-        """Switch to next preset"""
-        if len(self.presets) == 0:
-            return
-
-        self.current_preset_index = (self.current_preset_index + 1) % len(self.presets)
-        self.change_preset(self.current_preset_index)
-
-    def previous_preset(self):
-        """Switch to previous preset"""
-        if len(self.presets) == 0:
-            return
-
-        self.current_preset_index = (self.current_preset_index - 1) % len(self.presets)
-        self.change_preset(self.current_preset_index)
-
-    def toggle_auto_switch(self, enabled):
-        """Toggle auto preset switching"""
-        self.auto_switch = enabled
-
-    def auto_switch_preset(self):
-        """Auto-switch presets after duration - not used for standalone projectM"""
-        pass
-
-    def update_audio(self, audio_data):
-        """Update audio data for visualization"""
-        if len(audio_data) > 0:
-            # Resample to 512 samples
-            if len(audio_data) >= 512:
-                self.audio_buffer = audio_data[:512].astype(np.float32)
-            else:
-                self.audio_buffer[:len(audio_data)] = audio_data.astype(np.float32)
-
-            if hasattr(self, 'gl_widget') and hasattr(self.gl_widget, 'add_audio'):
-                self.gl_widget.add_audio(self.audio_buffer)
-
-    def update_visualization(self):
-        """Trigger visualization update"""
-        if hasattr(self, 'gl_widget'):
-            self.gl_widget.update()
-
-    def cleanup(self):
-        """Clean up resources"""
-        if hasattr(self, 'gl_widget'):
-            self.gl_widget.cleanup()
-
-
-class ProjectMGLWidget(QOpenGLWidget):
-    """OpenGL widget for ProjectM rendering - Native libprojectM integration"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.projectm_handle = None
-        self.current_preset = None
-        self.initialized = False
-        self.preset_locked = False
-
-        # Ensure we get an OpenGL 3.3 core profile context for projectM
-        from PyQt6.QtGui import QSurfaceFormat
-        gl_format = QSurfaceFormat()
-        gl_format.setVersion(3, 3)
-        gl_format.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
-        gl_format.setDepthBufferSize(24)
-        gl_format.setStencilBufferSize(8)
-        gl_format.setSwapBehavior(QSurfaceFormat.SwapBehavior.DoubleBuffer)
-        self.setFormat(gl_format)
-
-        # Enable keyboard focus
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-
-        # Timer for continuous animation at 60 FPS
-        self.anim_timer = QTimer(self)
-        self.anim_timer.timeout.connect(self.update)
-        self.anim_timer.start(16)  # ~60 FPS
-
-    def keyPressEvent(self, event):
-        """Handle keyboard input for projectM controls"""
-        key = event.key()
-
-        # Get parent ProjectMWidget to access presets
-        parent_widget = self.parent()
-        if not parent_widget:
-            return
-
-        if key == Qt.Key.Key_N or key == Qt.Key.Key_Right:
-            # Next preset
-            if hasattr(parent_widget, 'next_preset'):
-                parent_widget.next_preset()
-        elif key == Qt.Key.Key_P or key == Qt.Key.Key_Left:
-            # Previous preset
-            if hasattr(parent_widget, 'previous_preset'):
-                parent_widget.previous_preset()
-        elif key == Qt.Key.Key_R:
-            # Random preset
-            if hasattr(parent_widget, 'presets') and len(parent_widget.presets) > 0:
-                import random
-                parent_widget.current_preset_index = random.randint(0, len(parent_widget.presets) - 1)
-                parent_widget.change_preset(parent_widget.current_preset_index)
-        elif key == Qt.Key.Key_L:
-            # Toggle preset lock
-            self.preset_locked = not self.preset_locked
-            if self.projectm_handle:
-                libprojectm.projectm_set_preset_locked(self.projectm_handle, self.preset_locked)
-        elif key == Qt.Key.Key_Space:
-            # Toggle auto-switch (in parent widget)
-            if hasattr(parent_widget, 'auto_switch'):
-                parent_widget.auto_switch = not parent_widget.auto_switch
-        else:
-            super().keyPressEvent(event)
-
-    def mousePressEvent(self, event):
-        """Focus widget on click for keyboard input"""
-        self.setFocus()
-        super().mousePressEvent(event)
-
-    def initializeGL(self):
-        """Initialize OpenGL context and create projectM instance"""
-        if not PROJECTM_AVAILABLE or not OPENGL_AVAILABLE:
-            print("ProjectM or OpenGL not available")
-            return
-
-        try:
-            # Create projectM instance
-            # IMPORTANT: Must be called after OpenGL context is current
-            self.makeCurrent()
-            self.projectm_handle = libprojectm.projectm_create()
-
-            if not self.projectm_handle:
-                print("ERROR: Failed to create projectM instance")
-                print("  This usually means the OpenGL context is not properly initialized")
-                return
-
-            print(f"Successfully created projectM instance: {self.projectm_handle}")
-
-            # Configure projectM
-            libprojectm.projectm_set_window_size(
-                self.projectm_handle,
-                self.width(),
-                self.height()
-            )
-
-            # Set FPS
-            libprojectm.projectm_set_fps(self.projectm_handle, 60)
-
-            # Set preset duration to 30 seconds
-            libprojectm.projectm_set_preset_duration(self.projectm_handle, 30.0)
-
-            # Load initial preset (idle preset with projectM logo)
-            self.load_preset("idle://")
-
-            self.initialized = True
-            print("ProjectM initialization complete")
-
-        except Exception as e:
-            print(f"OpenGL/ProjectM initialization error: {e}")
-            import traceback
-            traceback.print_exc()
-
-    def resizeGL(self, w, h):
-        """Handle resize events"""
-        if not OPENGL_AVAILABLE:
-            return
-
-        try:
-            GL.glViewport(0, 0, w, h)
-
-            # Update projectM window size
-            if self.projectm_handle:
-                libprojectm.projectm_set_window_size(
-                    self.projectm_handle,
-                    w,
-                    h
-                )
-        except Exception as e:
-            print(f"Resize error: {e}")
-
-    def paintGL(self):
-        """Render ProjectM visualization"""
-        if not OPENGL_AVAILABLE or not self.initialized or not self.projectm_handle:
-            # Fallback: clear to black
-            try:
-                GL.glClearColor(0.0, 0.0, 0.0, 1.0)
-                GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
-            except:
-                pass
-            return
-
-        try:
-            # Render projectM frame
-            # This will render directly into the current OpenGL context
-            libprojectm.projectm_opengl_render_frame(self.projectm_handle)
-
-        except Exception as e:
-            print(f"Render error: {e}")
-            # Fallback rendering
-            try:
-                GL.glClearColor(0.0, 0.0, 0.0, 1.0)
-                GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
-            except:
-                pass
-
-    def load_preset(self, preset_path):
-        """Load a milkdrop preset file"""
-        if not self.projectm_handle:
-            return
-
-        try:
-            # Convert path to bytes for C API
-            if isinstance(preset_path, str):
-                preset_bytes = preset_path.encode('utf-8')
-            else:
-                preset_bytes = preset_path
-
-            # Load preset with smooth transition
-            libprojectm.projectm_load_preset_file(
-                self.projectm_handle,
-                preset_bytes,
-                True  # smooth_transition
-            )
-
-            self.current_preset = preset_path
-            print(f"Loaded preset: {preset_path}")
-
-        except Exception as e:
-            print(f"Failed to load preset {preset_path}: {e}")
-
-    def add_audio(self, audio_data):
-        """Add audio samples for visualization"""
-        if not self.projectm_handle or not self.initialized:
-            return
-
-        try:
-            # Ensure audio_data is numpy array of float32
-            if not isinstance(audio_data, np.ndarray):
-                audio_data = np.array(audio_data, dtype=np.float32)
-            elif audio_data.dtype != np.float32:
-                audio_data = audio_data.astype(np.float32)
-
-            # Ensure values are in range [-1, 1]
-            audio_data = np.clip(audio_data, -1.0, 1.0)
-
-            # Get pointer to audio data
-            audio_ptr = audio_data.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
-
-            # Add audio to projectM (mono = 1, stereo = 2)
-            # We'll use mono for simplicity
-            libprojectm.projectm_pcm_add_float(
-                self.projectm_handle,
-                audio_ptr,
-                len(audio_data),
-                1  # PROJECTM_MONO
-            )
-
-        except Exception as e:
-            print(f"Failed to add audio data: {e}")
-
-    def cleanup(self):
-        """Clean up projectM instance"""
-        if self.projectm_handle:
-            try:
-                libprojectm.projectm_destroy(self.projectm_handle)
-                print("ProjectM instance destroyed")
-            except Exception as e:
-                print(f"Error destroying projectM: {e}")
-            finally:
-                self.projectm_handle = None
-                self.initialized = False
-
-    def __del__(self):
-        """Destructor to ensure cleanup"""
-        self.cleanup()
 
 
 class EqualizerWidget(QWidget):
@@ -3188,10 +2849,20 @@ class PipeWireController:
         config = f"""# Generated by PipeDreams
 context.properties = {{
     default.clock.rate = {sample_rate}
+    default.clock.allowed-rates = [ 44100 48000 88200 96000 176400 192000 ]
     default.clock.quantum = {quantum}
     default.clock.min-quantum = {min_quantum}
     default.clock.max-quantum = {max_quantum}
 }}
+
+context.modules = [
+    {{ name = libpipewire-module-rt
+        args = {{
+            nice.level = -11
+            rt.prio = 88
+        }}
+    }}
+]
 """
         try:
             with open(self.config_file, 'w') as f:
@@ -3223,7 +2894,7 @@ context.properties = {{
                 capture_output=True, text=True, check=True,
                 env=env
             )
-            settings = {'sample_rate': 48000, 'quantum': 1024}
+            settings = {'sample_rate': 192000, 'quantum': 1024}
 
             for line in result.stdout.split('\n'):
                 if 'clock.rate' in line and '=' in line and 'limit' not in line and 'floor' not in line:
@@ -3243,7 +2914,7 @@ context.properties = {{
 
             return settings
         except subprocess.CalledProcessError:
-            return {'sample_rate': 48000, 'quantum': 1024}
+            return {'sample_rate': 192000, 'quantum': 1024}
 
     def apply_equalizer(self, eq_values):
         """
@@ -3389,52 +3060,24 @@ class PipeDreamsWindow(QMainWindow):
         self.inhibit_sleep()
 
     def init_ui(self):
-        # Prevent double initialization
         if self.ui_initialized:
-            print("ERROR: init_ui() called AGAIN despite guard! Ignoring.")
-            import traceback
-            traceback.print_stack()
             return
         self.ui_initialized = True
-        print("DEBUG: init_ui() proceeding - creating UI widgets")
 
         self.setWindowTitle("PipeDreams - Audio Control Center")
         self.setMinimumSize(900, 600)
 
         # Set window icon for taskbar
-        icon_paths = [
-            "/usr/local/share/pixmaps/pipedreams.png",
-            "/root/pipedreams/pipedreams_icon.png"
-        ]
-        for icon_path in icon_paths:
+        for icon_path in ICON_PATHS:
             if os.path.exists(icon_path):
                 self.setWindowIcon(QIcon(icon_path))
                 break
 
         self.apply_dark_theme()
 
-        print("DEBUG: Creating main_widget and setting as central widget")
-
-        # Check if there's already a central widget
-        existing_central = self.centralWidget()
-        if existing_central is not None:
-            print(f"WARNING: Central widget already exists: {existing_central}")
-            print(f"  Existing widget has {existing_central.layout().count() if existing_central.layout() else 0} items in layout")
-            # Don't create a new one if it already exists
-            main_widget = existing_central
-            layout = existing_central.layout()
-            if layout is not None:
-                print("ERROR: Layout already exists, clearing it to prevent duplication")
-                while layout.count():
-                    child = layout.takeAt(0)
-                    if child.widget():
-                        child.widget().deleteLater()
-        else:
-            main_widget = QWidget()
-            self.setCentralWidget(main_widget)
-            layout = QVBoxLayout(main_widget)
-        print(f"DEBUG: Central widget set. Widget ID: {id(main_widget)}")
-        print(f"DEBUG: VBoxLayout created for main_widget")
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        layout = QVBoxLayout(main_widget)
 
         # Create header with icon and fancy text
         header_container = QWidget()
@@ -3444,24 +3087,14 @@ class PipeDreamsWindow(QMainWindow):
 
         # Icon
         icon_label = QLabel()
-        icon_paths = [
-            "/usr/local/share/pixmaps/pipedreams.png",
-            "/root/pipedreams/pipedreams_icon.png"
-        ]
-
-        icon_loaded = False
-        for icon_path in icon_paths:
+        for icon_path in ICON_PATHS:
             if os.path.exists(icon_path):
                 pixmap = QPixmap(icon_path)
                 if not pixmap.isNull():
-                    # Scale icon to double size (160px height)
                     scaled_pixmap = pixmap.scaledToHeight(160, Qt.TransformationMode.SmoothTransformation)
                     icon_label.setPixmap(scaled_pixmap)
-                    icon_loaded = True
+                    header_layout.addWidget(icon_label)
                     break
-
-        if icon_loaded:
-            header_layout.addWidget(icon_label)
 
         # Fancy text container
         text_container = QWidget()
@@ -3482,7 +3115,7 @@ class PipeDreamsWindow(QMainWindow):
         text_layout.addWidget(title_label)
 
         # Version and subtitle
-        subtitle_label = QLabel("v2.2.3  •  Advanced Audio Visualization")
+        subtitle_label = QLabel(f"v{APP_VERSION}  •  Advanced Audio Visualization")
         subtitle_label.setFont(QFont("Arial", 12, QFont.Weight.Normal))
         subtitle_label.setStyleSheet("""
             QLabel {
@@ -3498,20 +3131,17 @@ class PipeDreamsWindow(QMainWindow):
 
         layout.addWidget(header_container)
 
-        # Use QStackedWidget + button bar instead of QTabWidget to avoid Wayland rendering bug
-        print("DEBUG: Creating button bar for navigation")
         button_bar = QWidget()
         button_layout = QHBoxLayout(button_bar)
         button_layout.setContentsMargins(0, 0, 0, 0)
         button_layout.setSpacing(2)
 
-        print("DEBUG: Creating stacked widget")
         self.stacked_widget = QStackedWidget()
 
         # Create all pages
         pages = [
             ("📊 Visualizer", self.create_visualizer_tab()),
-            ("🎆 ProjectM", self.create_projectm_tab()),
+            ("🥛 MilkDropper", self.create_milkdropper_tab()),
             ("🎧 Devices", self.create_devices_tab()),
             ("🎚️ Equalizer", self.create_equalizer_tab()),
             ("🎛️ Spectrum Settings", self.create_spectrum_settings_tab()),
@@ -3534,7 +3164,6 @@ class PipeDreamsWindow(QMainWindow):
 
         button_layout.addStretch()
 
-        print(f"DEBUG: Adding button bar and stacked widget to layout")
         layout.addWidget(button_bar)
         layout.addWidget(self.stacked_widget)
 
@@ -3636,6 +3265,7 @@ class PipeDreamsWindow(QMainWindow):
             'Winamp Waterfall',
             'Waterfall',
             'Liquid Waterfall',
+            'Raindrops',
             'Plasma',
             '80s VFD',
             '90s VFD',
@@ -3697,196 +3327,204 @@ class PipeDreamsWindow(QMainWindow):
 
         return widget
 
-    def create_projectm_tab(self):
-        """Create the ProjectM visualization tab"""
+    def create_milkdropper_tab(self):
+        """Create the MilkDropper control tab.
+
+        MilkDropper is PipeDreams' sister project: it renders projectM
+        (MilkDrop) visuals as a live KDE Plasma wallpaper or a standalone
+        window. Visualization happens in MilkDropper itself — this tab
+        controls a running instance, or helps install it when missing.
+        """
         widget = QWidget()
         layout = QVBoxLayout(widget)
 
-        # Info group
-        info_group = QGroupBox("ProjectM - Winamp/Milkdrop Style Visualizations")
+        info_group = QGroupBox("MilkDropper — MilkDrop Visuals on Your Desktop")
         info_layout = QVBoxLayout()
-
-        if PROJECTM_AVAILABLE:
-            info_label = QLabel("ProjectM provides classic Winamp/Milkdrop visualizations with hundreds of presets.")
-            info_label.setWordWrap(True)
-            info_layout.addWidget(info_label)
-        else:
-            warning_label = QLabel("⚠ ProjectM library not found. Install with: sudo apt install libprojectm2v5 projectm-data")
-            warning_label.setStyleSheet("QLabel { color: orange; font-weight: bold; }")
-            warning_label.setWordWrap(True)
-            info_layout.addWidget(warning_label)
-
+        info_label = QLabel(
+            "MilkDropper is PipeDreams' sister project. It renders classic "
+            "Winamp/MilkDrop visuals (via projectM) as your live desktop wallpaper "
+            "or in a standalone window, reacting to whatever you're playing."
+        )
+        info_label.setWordWrap(True)
+        info_layout.addWidget(info_label)
         info_group.setLayout(info_layout)
         layout.addWidget(info_group)
 
-        # Preset Controls
-        controls_group = QGroupBox("Preset Controls")
-        controls_layout = QVBoxLayout()
+        self.milkdropper_stack = QStackedWidget()
+        self.milkdropper_stack.addWidget(self.build_milkdropper_controls())
+        self.milkdropper_stack.addWidget(self.build_milkdropper_installer())
+        layout.addWidget(self.milkdropper_stack)
+        layout.addStretch()
 
-        # Load available presets
-        self.projectm_presets = self.load_projectm_presets()
-        self.current_preset_index = 0
-        self.preset_locked = False
-
-        # Preset dropdown
-        preset_layout = QHBoxLayout()
-        preset_layout.addWidget(QLabel("Select Preset:"))
-        self.projectm_preset_combo = QComboBox()
-        self.projectm_preset_combo.addItems(['-- Select Preset --'] + self.projectm_presets)
-        self.projectm_preset_combo.currentIndexChanged.connect(self.on_projectm_preset_selected)
-        preset_layout.addWidget(self.projectm_preset_combo, 1)
-        controls_layout.addLayout(preset_layout)
-
-        # Navigation buttons
-        nav_layout = QHBoxLayout()
-
-        prev_btn = QPushButton("⏮ Previous")
-        prev_btn.clicked.connect(self.projectm_previous_preset)
-        nav_layout.addWidget(prev_btn)
-
-        next_btn = QPushButton("Next ⏭")
-        next_btn.clicked.connect(self.projectm_next_preset)
-        nav_layout.addWidget(next_btn)
-
-        random_btn = QPushButton("🔀 Random")
-        random_btn.clicked.connect(self.projectm_random_preset)
-        nav_layout.addWidget(random_btn)
-
-        controls_layout.addLayout(nav_layout)
-
-        # Lock and shuffle controls
-        toggles_layout = QHBoxLayout()
-
-        self.lock_preset_btn = QPushButton("🔓 Unlock Preset")
-        self.lock_preset_btn.setCheckable(True)
-        self.lock_preset_btn.clicked.connect(self.projectm_toggle_lock)
-        toggles_layout.addWidget(self.lock_preset_btn)
-
-        self.shuffle_btn = QPushButton("🔀 Auto-Shuffle: OFF")
-        self.shuffle_btn.setCheckable(True)
-        self.shuffle_btn.clicked.connect(self.projectm_toggle_shuffle)
-        toggles_layout.addWidget(self.shuffle_btn)
-
-        controls_layout.addLayout(toggles_layout)
-
-        controls_group.setLayout(controls_layout)
-        layout.addWidget(controls_group)
-
-        # ProjectM widget
-        self.projectm_widget = ProjectMWidget()
-        self.projectm_widget.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding
-        )
-        layout.addWidget(self.projectm_widget, 1)
-
+        self.refresh_milkdropper_state()
         return widget
 
-    def load_projectm_presets(self):
-        """Load all projectM presets from the presets directory"""
-        import os
-        preset_dir = "/usr/local/share/projectM/presets/"
+    @staticmethod
+    def find_milkdropper():
+        """Return the path to the milkdropper launcher, or None if not installed."""
+        found = shutil.which('milkdropper')
+        if found:
+            return found
+        candidates = [
+            '/usr/local/bin/milkdropper',
+            '/usr/bin/milkdropper',
+            os.path.expanduser('~/.local/bin/milkdropper'),
+        ]
+        for candidate in candidates:
+            if os.access(candidate, os.X_OK):
+                return candidate
+        return None
+
+    @staticmethod
+    def detect_package_format():
+        """Detect which package format this system uses ('deb', 'rpm' or None)."""
+        if shutil.which('dpkg') or shutil.which('apt'):
+            return 'deb'
+        if shutil.which('rpm') or shutil.which('dnf') or shutil.which('zypper'):
+            return 'rpm'
+        return None
+
+    def build_milkdropper_controls(self):
+        """Controls shown when MilkDropper is installed."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        launch_group = QGroupBox("MilkDropper")
+        launch_layout = QHBoxLayout()
+        self.milkdropper_status_label = QLabel("MilkDropper detected")
+        self.milkdropper_status_label.setStyleSheet("color: #00ff88;")
+        launch_layout.addWidget(self.milkdropper_status_label)
+        launch_layout.addStretch()
+
+        launch_btn = QPushButton("🥛 Open MilkDropper")
+        launch_btn.setToolTip("Start the MilkDropper tray controller (or pop its menu if already running)")
+        launch_btn.clicked.connect(self.launch_milkdropper)
+        launch_layout.addWidget(launch_btn)
+        launch_group.setLayout(launch_layout)
+        layout.addWidget(launch_group)
+
+        preset_group = QGroupBox("Preset Controls")
+        preset_layout = QHBoxLayout()
+
+        prev_btn = QPushButton("⏮ Previous")
+        prev_btn.clicked.connect(lambda: self.send_milkdropper_cmd('prev'))
+        preset_layout.addWidget(prev_btn)
+
+        next_btn = QPushButton("⏭ Next")
+        next_btn.clicked.connect(lambda: self.send_milkdropper_cmd('next'))
+        preset_layout.addWidget(next_btn)
+
+        random_btn = QPushButton("🎲 Random")
+        random_btn.clicked.connect(lambda: self.send_milkdropper_cmd('random'))
+        preset_layout.addWidget(random_btn)
+
+        self.milkdropper_lock_btn = QPushButton("🔓 Lock Preset")
+        self.milkdropper_lock_btn.setToolTip("Keep the current preset instead of auto-switching")
+        self.milkdropper_lock_btn.clicked.connect(self.milkdropper_toggle_lock)
+        preset_layout.addWidget(self.milkdropper_lock_btn)
+
+        preset_layout.addStretch()
+        preset_group.setLayout(preset_layout)
+        layout.addWidget(preset_group)
+
+        note = QLabel(
+            "Visuals render on your desktop (wallpaper mode) or in MilkDropper's "
+            "standalone window — pick the mode from its tray icon."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #888;")
+        layout.addWidget(note)
+        layout.addStretch()
+        return page
+
+    def build_milkdropper_installer(self):
+        """Install helper shown when MilkDropper is not installed."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        group = QGroupBox("MilkDropper Not Installed")
+        group_layout = QVBoxLayout()
+
+        pkg_format = self.detect_package_format()
+        if pkg_format == 'deb':
+            hint = ("This system uses .deb packages. Grab the latest "
+                    "milkdropper_*.deb from the releases page, then:")
+            command = "sudo apt install ./milkdropper_*.deb"
+        elif pkg_format == 'rpm':
+            hint = ("This system uses .rpm packages. Grab the latest "
+                    "milkdropper-*.rpm from the releases page, then:")
+            command = "sudo dnf install ./milkdropper-*.rpm"
+        else:
+            hint = ("No deb/rpm package manager detected — install from source "
+                    "using the repository's install.sh:")
+            command = f"git clone {MILKDROPPER_REPO_URL} && cd MilkDropper && ./install.sh"
+
+        msg = QLabel("MilkDropper isn't installed yet. " + hint)
+        msg.setWordWrap(True)
+        group_layout.addWidget(msg)
+
+        cmd_label = QLabel(command)
+        cmd_label.setStyleSheet(
+            "font-family: monospace; background-color: #1a1a1a; color: #00ff88; "
+            "padding: 8px; border: 1px solid #333; border-radius: 4px;"
+        )
+        cmd_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        group_layout.addWidget(cmd_label)
+
+        btn_layout = QHBoxLayout()
+        releases_btn = QPushButton("⬇ Open MilkDropper Releases")
+        releases_btn.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl(MILKDROPPER_RELEASES_URL)))
+        btn_layout.addWidget(releases_btn)
+
+        recheck_btn = QPushButton("🔄 Check Again")
+        recheck_btn.clicked.connect(self.refresh_milkdropper_state)
+        btn_layout.addWidget(recheck_btn)
+        btn_layout.addStretch()
+        group_layout.addLayout(btn_layout)
+
+        group.setLayout(group_layout)
+        layout.addWidget(group)
+        layout.addStretch()
+        return page
+
+    def refresh_milkdropper_state(self):
+        """Show controls if MilkDropper is installed, install helper otherwise."""
+        installed = self.find_milkdropper() is not None
+        self.milkdropper_stack.setCurrentIndex(0 if installed else 1)
+        if installed:
+            self.milkdropper_status_label.setText("MilkDropper detected ✓")
+
+    def launch_milkdropper(self):
+        """Start MilkDropper (single-instance aware: relaunching pops its menu)."""
+        binary = self.find_milkdropper()
+        if not binary:
+            self.refresh_milkdropper_state()
+            return
         try:
-            if os.path.exists(preset_dir):
-                presets = [f.replace('.milk', '') for f in sorted(os.listdir(preset_dir)) if f.endswith('.milk')]
-                print(f"Loaded {len(presets)} projectM presets")
-                return presets
-            else:
-                print(f"ProjectM preset directory not found: {preset_dir}")
-                return []
-        except Exception as e:
-            print(f"Error loading projectM presets: {e}")
-            return []
+            subprocess.Popen([binary], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+            self.set_status("MilkDropper launched — look for the tray icon")
+        except OSError as e:
+            self.set_status(f"Failed to launch MilkDropper: {e}")
 
-    def send_key_to_projectm(self, key):
-        """Send keyboard event to the embedded projectM window"""
-        if hasattr(self.projectm_widget, 'projectm_wid') and self.projectm_widget.projectm_wid:
-            import subprocess
-            try:
-                # Use xdotool to send key press to the projectM window
-                subprocess.run(['xdotool', 'key', '--window', self.projectm_widget.projectm_wid, key], check=False)
-            except Exception as e:
-                print(f"Failed to send key to projectM: {e}")
+    def send_milkdropper_cmd(self, cmd):
+        """Send a command to MilkDropper's wallpaper renderer via its command file."""
+        try:
+            with open(MILKDROPPER_CMD_FILE, 'w') as f:
+                f.write(cmd)
+            self.set_status(f"MilkDropper: {cmd}")
+        except OSError as e:
+            self.set_status(f"MilkDropper command failed: {e}")
 
-    def load_specific_preset(self, preset_name):
-        """Load a specific preset by writing to projectM config and sending commands"""
-        import time
-        # For now, we'll use keyboard navigation since projectM doesn't have a direct API
-        # This is a simplified implementation - finding and loading specific preset by index
-        if preset_name in self.projectm_presets:
-            target_index = self.projectm_presets.index(preset_name)
-            current_index = self.current_preset_index
-
-            # Navigate to the target preset with delays for projectM to process
-            if target_index > current_index:
-                # Go forward
-                for _ in range(target_index - current_index):
-                    self.send_key_to_projectm('n')
-                    time.sleep(0.05)  # Small delay between key presses
-            elif target_index < current_index:
-                # Go backward
-                for _ in range(current_index - target_index):
-                    self.send_key_to_projectm('p')
-                    time.sleep(0.05)  # Small delay between key presses
-
-            self.current_preset_index = target_index
-            print(f"Loaded preset: {preset_name} (index {target_index})")
-
-    def on_projectm_preset_selected(self, index):
-        """Handle preset selection from dropdown"""
-        if index > 0:  # Skip the "-- Select Preset --" option
-            preset_name = self.projectm_presets[index - 1]
-            self.load_specific_preset(preset_name)
-
-    def projectm_previous_preset(self):
-        """Go to previous preset"""
-        self.send_key_to_projectm('p')
-        if self.current_preset_index > 0:
-            self.current_preset_index -= 1
-            # Update dropdown without triggering on_projectm_preset_selected
-            self.projectm_preset_combo.blockSignals(True)
-            self.projectm_preset_combo.setCurrentIndex(self.current_preset_index + 1)
-            self.projectm_preset_combo.blockSignals(False)
-
-    def projectm_next_preset(self):
-        """Go to next preset"""
-        self.send_key_to_projectm('n')
-        if self.current_preset_index < len(self.projectm_presets) - 1:
-            self.current_preset_index += 1
-            # Update dropdown without triggering on_projectm_preset_selected
-            self.projectm_preset_combo.blockSignals(True)
-            self.projectm_preset_combo.setCurrentIndex(self.current_preset_index + 1)
-            self.projectm_preset_combo.blockSignals(False)
-
-    def projectm_random_preset(self):
-        """Load a random preset"""
-        self.send_key_to_projectm('r')
-        import random
-        self.current_preset_index = random.randint(0, len(self.projectm_presets) - 1)
-        # Update dropdown without triggering on_projectm_preset_selected
-        self.projectm_preset_combo.blockSignals(True)
-        self.projectm_preset_combo.setCurrentIndex(self.current_preset_index + 1)
-        self.projectm_preset_combo.blockSignals(False)
-
-    def projectm_toggle_lock(self):
-        """Toggle preset lock"""
-        self.preset_locked = not self.preset_locked
-        self.send_key_to_projectm('l')
-        if self.preset_locked:
-            self.lock_preset_btn.setText("🔒 Lock Preset")
+    def milkdropper_toggle_lock(self):
+        """Toggle preset lock on the MilkDropper renderer."""
+        self.milkdropper_locked = not getattr(self, 'milkdropper_locked', False)
+        self.send_milkdropper_cmd('lock' if self.milkdropper_locked else 'unlock')
+        if self.milkdropper_locked:
+            self.milkdropper_lock_btn.setText("🔒 Unlock Preset")
         else:
-            self.lock_preset_btn.setText("🔓 Unlock Preset")
-
-    def projectm_toggle_shuffle(self):
-        """Toggle shuffle mode"""
-        # ProjectM doesn't have a direct shuffle toggle, but we can use 'r' for random
-        # This is a UI-only toggle that we can use to enable auto-shuffle with a timer
-        if self.shuffle_btn.isChecked():
-            self.shuffle_btn.setText("🔀 Auto-Shuffle: ON")
-            # You could add a QTimer here to auto-shuffle every N seconds
-            # For now, just indicate the state
-        else:
-            self.shuffle_btn.setText("🔀 Auto-Shuffle: OFF")
+            self.milkdropper_lock_btn.setText("🔓 Lock Preset")
 
     def create_equalizer_tab(self):
         widget = QWidget()
@@ -4123,7 +3761,7 @@ class PipeDreamsWindow(QMainWindow):
         self.save_app_settings()
 
     def toggle_agc(self, state):
-        self.spectrum_analyzer.use_auto_gain = (state == Qt.CheckState.Checked.value)
+        self.spectrum_analyzer.use_auto_gain = (Qt.CheckState(state) == Qt.CheckState.Checked)
         self.save_app_settings()
 
     def update_agc_target(self, value):
@@ -4149,20 +3787,21 @@ class PipeDreamsWindow(QMainWindow):
             2: 'winamp_waterfall',
             3: 'waterfall',
             4: 'liquid_waterfall',
-            5: 'plasma',
-            6: 'vfd_80s',
-            7: 'vfd_90s',
-            8: 'non_newtonian',
-            9: 'neon_pulse',
-            10: 'aurora',
-            11: 'lava_lamp',
-            12: 'matrix',
-            13: 'seismograph',
-            14: 'kaleidoscope',
-            15: 'nebula',
-            16: 'electric',
-            17: 'liquid_metal',
-            18: 'rainbow_bars'
+            5: 'raindrops',
+            6: 'plasma',
+            7: 'vfd_80s',
+            8: 'vfd_90s',
+            9: 'non_newtonian',
+            10: 'neon_pulse',
+            11: 'aurora',
+            12: 'lava_lamp',
+            13: 'matrix',
+            14: 'seismograph',
+            15: 'kaleidoscope',
+            16: 'nebula',
+            17: 'electric',
+            18: 'liquid_metal',
+            19: 'rainbow_bars'
         }
         if index in mode_map:
             self.change_viz_mode(mode_map[index])
@@ -4180,7 +3819,7 @@ class PipeDreamsWindow(QMainWindow):
         sr_layout.addWidget(QLabel("Sample Rate:"))
         self.sample_rate = QComboBox()
         self.sample_rate.addItems(['44100', '48000', '88200', '96000', '192000'])
-        self.sample_rate.setCurrentText('48000')
+        self.sample_rate.setCurrentText('192000')
         self.sample_rate.currentTextChanged.connect(self.update_buffer_viz)
         sr_layout.addWidget(self.sample_rate)
         sr_layout.addStretch()
@@ -4301,10 +3940,6 @@ class PipeDreamsWindow(QMainWindow):
         self.audio_scope.update_audio(audio_data)
         self.spectrum_analyzer.update_audio(audio_data)
 
-        # Update ProjectM visualizer if available
-        if hasattr(self, 'projectm_widget'):
-            self.projectm_widget.update_audio(audio_data)
-
         # Calculate audio stats
         if len(audio_data) > 0:
             self.current_audio_rms = np.sqrt(np.mean(audio_data**2))
@@ -4355,8 +3990,7 @@ class PipeDreamsWindow(QMainWindow):
             magnitude = np.abs(fft)
             if len(magnitude) > 0:
                 dominant_idx = np.argmax(magnitude)
-                sample_rate = 48000
-                self.current_audio_freq = (dominant_idx * sample_rate) / (2 * len(audio_data))
+                self.current_audio_freq = (dominant_idx * self.audio_monitor.sample_rate) / (2 * len(audio_data))
 
     def update_status_stats(self):
         """Update status bar with verbose audio statistics"""
@@ -4430,19 +4064,22 @@ class PipeDreamsWindow(QMainWindow):
 
     def apply_preset(self, preset):
         presets = {
-            'gaming': {'quantum': 512, 'min_quantum': 256, 'max_quantum': 1024},
-            'music': {'quantum': 256, 'min_quantum': 128, 'max_quantum': 512},
-            'streaming': {'quantum': 1024, 'min_quantum': 512, 'max_quantum': 2048},
-            'quality': {'quantum': 2048, 'min_quantum': 1024, 'max_quantum': 4096},
+            'gaming':    {'quantum': 512,  'min_quantum': 256,  'max_quantum': 1024},
+            'music':     {'quantum': 256,  'min_quantum': 128,  'max_quantum': 512,  'sample_rate': 192000},
+            'streaming': {'quantum': 1024, 'min_quantum': 512,  'max_quantum': 2048},
+            'quality':   {'quantum': 2048, 'min_quantum': 1024, 'max_quantum': 4096, 'sample_rate': 192000},
         }
 
         if preset in presets:
             config = presets[preset]
-            # Note: Sample rate is NOT changed by presets - user's selection is preserved
             self.quantum.setValue(config['quantum'])
             self.min_quantum.setValue(config['min_quantum'])
             self.max_quantum.setValue(config['max_quantum'])
-            self.set_status(f"Applied {preset.title()} preset (sample rate preserved)")
+            if 'sample_rate' in config:
+                self.sample_rate.setCurrentText(str(config['sample_rate']))
+                self.set_status(f"Applied {preset.title()} preset ({config['sample_rate']}Hz)")
+            else:
+                self.set_status(f"Applied {preset.title()} preset (sample rate preserved)")
 
     def on_builtin_preset_selected(self, preset_name):
         """Handle built-in preset selection"""
@@ -4574,12 +4211,10 @@ class PipeDreamsWindow(QMainWindow):
                 QMessageBox.warning(self, "Error", "Failed to disable EQ")
 
     def apply_settings(self):
-        print(f"Apply Settings Called!")  # DEBUG
         sample_rate = int(self.sample_rate.currentText())
         quantum = self.quantum.value()
         min_quantum = self.min_quantum.value()
         max_quantum = self.max_quantum.value()
-        print(f"Settings: rate={sample_rate}, quantum={quantum}, min={min_quantum}, max={max_quantum}")  # DEBUG
 
         if min_quantum > quantum or quantum > max_quantum:
             msg = QMessageBox(self)
@@ -4756,22 +4391,21 @@ Exists: {'Yes' if self.controller.config_file.exists() else 'No'}
 
             if 'agc_speed' in settings:
                 self.spectrum_analyzer.agc_speed = settings['agc_speed']
-                # Slider removed, using dropdown now
 
             if 'spectrum_scale' in settings:
                 self.spectrum_analyzer.spectrum_scale = settings['spectrum_scale']
-                # Slider removed, using dropdown now
 
             if 'visualization_mode' in settings:
                 self.spectrum_analyzer.mode = settings['visualization_mode']
                 # Update dropdown selection
                 mode_map = {
                     'classic': 0, 'winamp_fire': 1, 'winamp_waterfall': 2,
-                    'waterfall': 3, 'plasma': 4, 'vfd_80s': 5, 'vfd_90s': 6,
-                    'non_newtonian': 7, 'neon_pulse': 8, 'aurora': 9,
-                    'lava_lamp': 10, 'matrix': 11, 'seismograph': 12,
-                    'kaleidoscope': 13, 'nebula': 14, 'electric': 15,
-                    'liquid_metal': 16, 'rainbow_bars': 17
+                    'waterfall': 3, 'liquid_waterfall': 4, 'raindrops': 5,
+                    'plasma': 6, 'vfd_80s': 7, 'vfd_90s': 8,
+                    'non_newtonian': 9, 'neon_pulse': 10, 'aurora': 11,
+                    'lava_lamp': 12, 'matrix': 13, 'seismograph': 14,
+                    'kaleidoscope': 15, 'nebula': 16, 'electric': 17,
+                    'liquid_metal': 18, 'rainbow_bars': 19
                 }
                 if settings['visualization_mode'] in mode_map:
                     idx = mode_map[settings['visualization_mode']]
@@ -4838,7 +4472,7 @@ Exists: {'Yes' if self.controller.config_file.exists() else 'No'}
                 if reply.type() != reply.errorMessage and len(reply.arguments()) > 0:
                     self.inhibit_cookie = reply.arguments()[0]
 
-        except Exception as e:
+        except Exception:
             # Silently fail - sleep inhibition is not critical
             pass
 
@@ -4886,42 +4520,28 @@ Exists: {'Yes' if self.controller.config_file.exists() else 'No'}
 
 
 def main():
-    # Single instance lock - prevent multiple instances from running
+    # Single instance lock - prevent multiple instances from running.
+    # flock is released automatically when the holding process exits, so a
+    # failure here always means a live instance. Open in append mode so a
+    # losing contender never truncates the holder's PID.
     lock_file = Path("/tmp/pipedreams.lock")
-    lock_fd = None
+    lock_fd = open(lock_file, 'a')
     try:
-        lock_fd = open(lock_file, 'w')
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_fd.seek(0)
+        lock_fd.truncate()
+        lock_fd.write(str(os.getpid()))
+        lock_fd.flush()
     except (IOError, OSError):
         print("ERROR: Another instance of PipeDreams is already running!")
-        print("If you're sure no other instance is running, remove: /tmp/pipedreams.lock")
         sys.exit(1)
-
-    # Enable Qt multi-threaded rendering and hardware acceleration
-    # AA_UseOpenGLES can cause Wayland freezes - using default OpenGL instead
-    # QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseOpenGLES)
-    QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
-
-    # Set up OpenGL surface format for projectM (requires OpenGL 3.3+ core profile)
-    from PyQt6.QtGui import QSurfaceFormat
-    gl_format = QSurfaceFormat()
-    gl_format.setVersion(3, 3)
-    gl_format.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
-    gl_format.setDepthBufferSize(24)
-    gl_format.setStencilBufferSize(8)
-    gl_format.setSwapBehavior(QSurfaceFormat.SwapBehavior.DoubleBuffer)
-    QSurfaceFormat.setDefaultFormat(gl_format)
 
     app = QApplication(sys.argv)
     app.setApplicationName("PipeDreams")
     app.setDesktopFileName("pipedreams")  # Match .desktop file name for taskbar icon
 
     # Set application icon for taskbar/dock
-    icon_paths = [
-        "/usr/local/share/pixmaps/pipedreams.png",
-        "/root/pipedreams/pipedreams_icon.png"
-    ]
-    for icon_path in icon_paths:
+    for icon_path in ICON_PATHS:
         if os.path.exists(icon_path):
             app.setWindowIcon(QIcon(icon_path))
             break

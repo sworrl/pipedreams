@@ -1,0 +1,3 @@
+#!/bin/bash
+# PipeDreams launcher — the application lives in /usr/share/pipedreams.
+exec python3 /usr/share/pipedreams/pipedreams.py "$@"

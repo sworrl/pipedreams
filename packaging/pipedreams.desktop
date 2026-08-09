@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=PipeDreams
+Comment=Advanced Audio Visualization Control Center
+Exec=pipedreams
+Icon=pipedreams
+Terminal=false
+Categories=AudioVideo;Audio;
+StartupWMClass=pipedreams
