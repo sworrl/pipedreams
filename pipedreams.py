@@ -147,12 +147,20 @@ class AudioMonitor(QThread):
         self.running = False
         self.process = None
         self.sample_rate = sample_rate
+        self.device_name = None
 
     def set_sample_rate(self, sample_rate):
         """Update sample rate and restart if running"""
         self.sample_rate = sample_rate
         if self.running:
             self.restart()
+
+    def set_device(self, device_name):
+        """Set specific audio capture device/monitor and restart if running"""
+        if getattr(self, 'device_name', None) != device_name:
+            self.device_name = device_name
+            if self.running:
+                self.restart()
 
     def restart(self):
         """Restart the audio monitor"""
@@ -239,6 +247,9 @@ class AudioMonitor(QThread):
                     parec_cmd = ['parec', '--format=s16le', f'--rate={self.sample_rate}',
                                '--channels=1', '--latency-msec=10']
                     env = None
+
+                if self.device_name:
+                    parec_cmd.extend(['-d', str(self.device_name)])
 
                 self.process = subprocess.Popen(
                     parec_cmd,
@@ -2869,37 +2880,128 @@ class PipeWireController:
         self.config_dir.mkdir(parents=True, exist_ok=True)
 
     def get_devices(self):
+        """Get detailed list of output audio devices (sinks) with friendly descriptions."""
         try:
+            env = os.environ.copy()
+            if 'XDG_RUNTIME_DIR' not in env and os.getuid() > 0:
+                env['XDG_RUNTIME_DIR'] = f'/run/user/{os.getuid()}'
+
             result = subprocess.run(
-                ['pactl', 'list', 'sinks', 'short'],
-                capture_output=True, text=True, check=True,
-                env={**os.environ, 'XDG_RUNTIME_DIR': f'/run/user/{os.getuid()}'}
+                ['pactl', 'list', 'sinks'],
+                capture_output=True, text=True, check=True, env=env
             )
             devices = []
-            for line in result.stdout.strip().split('\n'):
-                if line:
-                    parts = line.split('\t')
-                    if len(parts) >= 2:
-                        devices.append({'id': parts[0], 'name': parts[1]})
+            cur = {}
+            for line in result.stdout.splitlines():
+                ls = line.strip()
+                if line.startswith('Sink #'):
+                    if cur and 'name' in cur:
+                        devices.append(cur)
+                    cur = {'id': line.split('#')[1].strip()}
+                elif 'Name: ' in ls and cur:
+                    cur['name'] = ls.split('Name: ')[1].strip()
+                elif 'Description: ' in ls and cur:
+                    cur['description'] = ls.split('Description: ')[1].strip()
+            if cur and 'name' in cur:
+                devices.append(cur)
+
+            if not devices:
+                res_short = subprocess.run(['pactl', 'list', 'sinks', 'short'], capture_output=True, text=True, env=env)
+                for line in res_short.stdout.splitlines():
+                    if line:
+                        parts = line.split('\t')
+                        if len(parts) >= 2:
+                            devices.append({'id': parts[0], 'name': parts[1], 'description': parts[1]})
             return devices
-        except subprocess.CalledProcessError:
+        except Exception:
             return []
 
     def get_sources(self):
+        """Get detailed list of input audio devices (sources) with friendly descriptions."""
         try:
+            env = os.environ.copy()
+            if 'XDG_RUNTIME_DIR' not in env and os.getuid() > 0:
+                env['XDG_RUNTIME_DIR'] = f'/run/user/{os.getuid()}'
+
             result = subprocess.run(
-                ['pactl', 'list', 'sources', 'short'],
-                capture_output=True, text=True, check=True
+                ['pactl', 'list', 'sources'],
+                capture_output=True, text=True, check=True, env=env
             )
             sources = []
-            for line in result.stdout.strip().split('\n'):
-                if line:
-                    parts = line.split('\t')
-                    if len(parts) >= 2:
-                        sources.append({'id': parts[0], 'name': parts[1]})
+            cur = {}
+            for line in result.stdout.splitlines():
+                ls = line.strip()
+                if line.startswith('Source #'):
+                    if cur and 'name' in cur:
+                        sources.append(cur)
+                    cur = {'id': line.split('#')[1].strip()}
+                elif 'Name: ' in ls and cur:
+                    cur['name'] = ls.split('Name: ')[1].strip()
+                elif 'Description: ' in ls and cur:
+                    cur['description'] = ls.split('Description: ')[1].strip()
+            if cur and 'name' in cur:
+                sources.append(cur)
+
+            if not sources:
+                res_short = subprocess.run(['pactl', 'list', 'sources', 'short'], capture_output=True, text=True, env=env)
+                for line in res_short.stdout.splitlines():
+                    if line:
+                        parts = line.split('\t')
+                        if len(parts) >= 2:
+                            sources.append({'id': parts[0], 'name': parts[1], 'description': parts[1]})
             return sources
-        except subprocess.CalledProcessError:
+        except Exception:
             return []
+
+    def get_default_sink(self):
+        """Get name of current default system output sink."""
+        try:
+            res = subprocess.run(['pactl', 'get-default-sink'], capture_output=True, text=True)
+            if res.returncode == 0 and res.stdout.strip():
+                return res.stdout.strip()
+        except Exception:
+            pass
+        return None
+
+    def get_default_source(self):
+        """Get name of current default system input source."""
+        try:
+            res = subprocess.run(['pactl', 'get-default-source'], capture_output=True, text=True)
+            if res.returncode == 0 and res.stdout.strip():
+                return res.stdout.strip()
+        except Exception:
+            pass
+        return None
+
+    def set_default_sink(self, sink_name_or_id):
+        """Set system default audio output sink."""
+        try:
+            subprocess.run(['pactl', 'set-default-sink', str(sink_name_or_id)], check=True)
+            if shutil.which('wpctl'):
+                try:
+                    subprocess.run(['wpctl', 'set-default', str(sink_name_or_id)], check=False,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+            return True
+        except Exception as e:
+            print(f"Error setting default sink: {e}")
+            return False
+
+    def set_default_source(self, source_name_or_id):
+        """Set system default audio input source."""
+        try:
+            subprocess.run(['pactl', 'set-default-source', str(source_name_or_id)], check=True)
+            if shutil.which('wpctl'):
+                try:
+                    subprocess.run(['wpctl', 'set-default', str(source_name_or_id)], check=False,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+            return True
+        except Exception as e:
+            print(f"Error setting default source: {e}")
+            return False
 
     def get_sink_volume(self, sink_id):
         try:
@@ -3359,8 +3461,18 @@ class PipeDreamsWindow(QMainWindow):
             'Rainbow Bars'
         ])
         self.viz_mode_dropdown.currentIndexChanged.connect(self.change_viz_mode_dropdown)
-        self.viz_mode_dropdown.setMinimumWidth(200)
+        self.viz_mode_dropdown.setMinimumWidth(180)
         theme_layout.addWidget(self.viz_mode_dropdown)
+
+        # Quick Audio Device Switcher in top header
+        theme_layout.addSpacing(15)
+        theme_layout.addWidget(QLabel("🎧 Audio Device:"))
+        self.quick_device_dropdown = QComboBox()
+        self.quick_device_dropdown.setMinimumWidth(220)
+        self.quick_device_dropdown.setToolTip("Switch active system audio output device & visualizer stream")
+        self.quick_device_dropdown.currentIndexChanged.connect(self.on_quick_device_changed)
+        theme_layout.addWidget(self.quick_device_dropdown)
+
         theme_layout.addStretch()
 
         theme_group.setLayout(theme_layout)
@@ -3817,9 +3929,17 @@ class PipeDreamsWindow(QMainWindow):
         output_group = QGroupBox("Output Devices (Sinks)")
         output_layout = QVBoxLayout()
 
+        out_select_layout = QHBoxLayout()
+        out_select_layout.addWidget(QLabel("Select Output Device:"))
         self.output_combo = QComboBox()
-        output_layout.addWidget(QLabel("Select Output Device:"))
-        output_layout.addWidget(self.output_combo)
+        out_select_layout.addWidget(self.output_combo, 1)
+
+        set_out_btn = QPushButton("🔊 Set System Default Output")
+        set_out_btn.setToolTip("Switch active system audio output to the selected device")
+        set_out_btn.clicked.connect(self.apply_output_device)
+        out_select_layout.addWidget(set_out_btn)
+
+        output_layout.addLayout(out_select_layout)
 
         volume_layout = QHBoxLayout()
         volume_layout.addWidget(QLabel("Volume:"))
@@ -3838,14 +3958,20 @@ class PipeDreamsWindow(QMainWindow):
 
         input_group = QGroupBox("Input Devices (Sources)")
         input_layout = QVBoxLayout()
+
+        in_select_layout = QHBoxLayout()
+        in_select_layout.addWidget(QLabel("Select Input Device:"))
         self.input_combo = QComboBox()
-        input_layout.addWidget(QLabel("Select Input Device:"))
-        input_layout.addWidget(self.input_combo)
+        in_select_layout.addWidget(self.input_combo, 1)
+
+        set_in_btn = QPushButton("🎙️ Set System Default Input")
+        set_in_btn.setToolTip("Switch active system audio input to the selected device")
+        set_in_btn.clicked.connect(self.apply_input_device)
+        in_select_layout.addWidget(set_in_btn)
+
+        input_layout.addLayout(in_select_layout)
         input_group.setLayout(input_layout)
         layout.addWidget(input_group)
-
-        self.output_combo.currentIndexChanged.connect(self.on_device_selection_changed)
-        self.input_combo.currentIndexChanged.connect(self.on_device_selection_changed)
 
         btn_bar = QHBoxLayout()
         refresh_btn = QPushButton("🔄 Refresh Devices")
@@ -3859,7 +3985,6 @@ class PipeDreamsWindow(QMainWindow):
         btn_bar.addStretch()
 
         layout.addLayout(btn_bar)
-
         layout.addStretch()
         return widget
 
@@ -4247,30 +4372,114 @@ class PipeDreamsWindow(QMainWindow):
         )
 
     def refresh_devices(self):
-        current_output = self.output_combo.currentText()
-        current_input = self.input_combo.currentText()
+        """Rescan all audio devices and update dropdown menus."""
+        self._updating_devices = True
+        try:
+            devices = self.controller.get_devices()
+            sources = self.controller.get_sources()
+            default_sink = self.controller.get_default_sink()
+            default_source = self.controller.get_default_source()
 
-        self.output_combo.clear()
-        devices = self.controller.get_devices()
-        for device in devices:
-            self.output_combo.addItem(f"{device['name']} (#{device['id']})", device['id'])
+            # 1. Update Output Combo & Quick Header Dropdown
+            self.output_combo.blockSignals(True)
+            self.quick_device_dropdown.blockSignals(True)
 
-        idx = self.output_combo.findText(current_output)
-        if idx >= 0:
-            self.output_combo.setCurrentIndex(idx)
+            self.output_combo.clear()
+            self.quick_device_dropdown.clear()
 
-        self.input_combo.clear()
-        sources = self.controller.get_sources()
-        for source in sources:
-            self.input_combo.addItem(f"{source['name']} (#{source['id']})", source['id'])
+            default_out_idx = 0
+            for idx, dev in enumerate(devices):
+                desc = dev.get('description', dev['name'])
+                display = f"{desc} (#{dev['id']})"
+                self.output_combo.addItem(display, dev['name'])
+                self.quick_device_dropdown.addItem(f"🔊 {desc}", dev['name'])
 
-        idx = self.input_combo.findText(current_input)
-        if idx >= 0:
-            self.input_combo.setCurrentIndex(idx)
+                if default_sink and (dev['name'] == default_sink or dev['id'] == default_sink):
+                    default_out_idx = idx
 
-        if self.output_combo.currentData():
-            volume = self.controller.get_sink_volume(self.output_combo.currentData())
-            self.output_volume.setValue(volume)
+            if devices:
+                self.output_combo.setCurrentIndex(default_out_idx)
+                self.quick_device_dropdown.setCurrentIndex(default_out_idx)
+
+            self.output_combo.blockSignals(False)
+            self.quick_device_dropdown.blockSignals(False)
+
+            # 2. Update Input Combo
+            self.input_combo.blockSignals(True)
+            self.input_combo.clear()
+
+            default_in_idx = 0
+            for idx, src in enumerate(sources):
+                desc = src.get('description', src['name'])
+                display = f"{desc} (#{src['id']})"
+                self.input_combo.addItem(display, src['name'])
+
+                if default_source and (src['name'] == default_source or src['id'] == default_source):
+                    default_in_idx = idx
+
+            if sources:
+                self.input_combo.setCurrentIndex(default_in_idx)
+
+            self.input_combo.blockSignals(False)
+
+            # 3. Update volume slider for active sink
+            if self.output_combo.currentData():
+                volume = self.controller.get_sink_volume(self.output_combo.currentData())
+                self.output_volume.setValue(volume)
+
+        finally:
+            self._updating_devices = False
+
+    def on_quick_device_changed(self, index):
+        """Handle quick device selection from top header bar."""
+        if getattr(self, '_updating_devices', False) or index < 0:
+            return
+        sink_name = self.quick_device_dropdown.currentData()
+        if sink_name:
+            self.switch_to_output_device(sink_name)
+
+    def apply_output_device(self):
+        """Apply selected output device from Devices tab."""
+        sink_name = self.output_combo.currentData()
+        if sink_name:
+            self.switch_to_output_device(sink_name)
+
+    def apply_input_device(self):
+        """Apply selected input device from Devices tab."""
+        source_name = self.input_combo.currentData()
+        if source_name:
+            self.switch_to_input_device(source_name)
+
+    def switch_to_output_device(self, sink_name):
+        """Switch system output sink and retarget visualizer capture."""
+        desc = self.quick_device_dropdown.currentText().replace('🔊 ', '')
+        if self.controller.set_default_sink(sink_name):
+            # Retarget AudioMonitor to capture from the new sink's monitor
+            monitor_source = f"{sink_name}.monitor"
+            self.audio_monitor.set_device(monitor_source)
+
+            # Handoff to MilkDropper if auto-sync is enabled
+            if getattr(self, 'milkdropper_autosync_cb', None) and self.milkdropper_autosync_cb.isChecked():
+                self.hand_audio_source_to_milkdropper(monitor_source)
+
+            self.set_status(f"Switched system output & visualizer to: {desc}")
+            self.refresh_devices()
+        else:
+            self.set_status(f"Failed to switch output to: {sink_name}")
+
+    def switch_to_input_device(self, source_name):
+        """Switch system input source and retarget visualizer capture."""
+        desc = self.input_combo.currentText()
+        if self.controller.set_default_source(source_name):
+            self.audio_monitor.set_device(source_name)
+
+            if getattr(self, 'milkdropper_autosync_cb', None) and self.milkdropper_autosync_cb.isChecked():
+                self.hand_audio_source_to_milkdropper(source_name)
+
+            self.set_status(f"Switched system input & visualizer to: {desc}")
+            self.refresh_devices()
+        else:
+            self.set_status(f"Failed to switch input to: {source_name}")
 
     def on_volume_changed(self, value):
         self.volume_label.setText(f"{value}%")
